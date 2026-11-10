@@ -189,6 +189,7 @@ std::atomic<int> s_micGainDb{30};
 std::atomic<int> s_micGainApplied{-1};
 
 std::atomic<int> s_spkId{-1};        // the utterance being queued/played
+std::atomic<uint32_t> s_spkPos{0};   // samples of it handed to I2S so far (a talking face keeps time by it)
 std::atomic<bool> s_spkEnded{false}; // no more audio for it
 std::atomic<bool> s_spkFlush{false}; // drop everything now
 std::atomic<int> s_spkDone{-1};      // finished playing (reported once)
@@ -259,11 +260,13 @@ void audioTask(void*) {
       s_spk.clear();
       speechStarted = false;
       playingId = -1;
+      s_spkPos = 0;
     }
     int id = s_spkId.load();
     if (id != playingId) {
       speechStarted = false;
       playingId = id;
+      s_spkPos = 0;
     }
     size_t speechN = 0;
     if (id >= 0) {
@@ -272,6 +275,7 @@ void audioTask(void*) {
         if (!ampOn) warm = kAmpWarmBlocks;
         if (warm == 0) {
           speechN = s_spk.read(s_speech, frames);
+          s_spkPos += (uint32_t)speechN;
           if (speechN < (size_t)frames) {
             if (s_spkEnded.load()) {
               // played out: report it, and go quiet
@@ -451,6 +455,8 @@ void speakerStop() {
 }
 
 bool speakerPlaying() { return detail::s_spkPlaying.load(); }
+
+uint32_t speakerPosition() { return detail::s_spkPos.load(); }
 
 size_t speakerFree() { return detail::s_spk.cap - detail::s_spk.available(); }
 

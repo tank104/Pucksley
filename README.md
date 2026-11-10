@@ -132,6 +132,7 @@ then means the kitchen speaker.
 | **MCP servers** | Add a command or URL | Any Model Context Protocol server's tools become Claude's tools. |
 | **This PC** / **PC audio** (Windows hub only) | – | Volume, media keys, now playing, audio outputs, per-app volume, open apps and files, lock/sleep/shutdown (asks first), screenshot ("what's on my screen?"), clipboard, typing, dark mode. |
 | **Speech engines** | API keys on their cards | Deepgram (hearing), Azure, OpenAI (and compatible: Groq, local Speaches/Kokoro), ElevenLabs, local Whisper, Piper, Windows. |
+| **Talking face (Openspline)** | [Openspline](https://docs.openspline.dev/get-started/self-host) on a PC with an NVIDIA GPU, and a portrait | While Pucksley speaks, the puck shows a face animated live to the voice (about 24 frames a second, over Wi-Fi). Put `portrait.png` (front-on, plain dark background) in the plugin's data folder or set its path. Without it the puck keeps its usual face. |
 
 Writing your own: see [docs/PLUGINS.md](docs/PLUGINS.md). A plugin is a C# class whose methods carry `[Tool]`
 attributes. Drop the DLL into the hub's `plugins` folder; for anything simpler, use Custom actions or an

@@ -61,6 +61,7 @@ void speakerWrite(const int16_t* pcm, size_t samples);  // queue audio (drops wh
 void speakerEnd(int id);                           // nothing more for this one: play out what's queued
 void speakerStop();                                // stop now and flush
 bool speakerPlaying();                             // speech is playing or queued
+uint32_t speakerPosition();                        // samples of the current utterance played so far
 size_t speakerFree();                              // samples that fit in the speech buffer right now
 int speakerTakeDone();                             // an utterance id that finished playing since last asked, or -1
 float speakerLevel();                              // 0..1, loudness of what's playing (for the face)

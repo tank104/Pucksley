@@ -45,6 +45,12 @@ public abstract class PuckConnection
 
     public abstract void SendAudio(ReadOnlySpan<short> samples);
 
+    /// <summary>
+    /// A talking-face frame: a JPEG to show when the puck's speaker reaches <paramref name="pts"/>
+    /// (samples of the current utterance). Wi-Fi only; false where the link can't carry video.
+    /// </summary>
+    public virtual bool SendVideoFrame(ReadOnlySpan<byte> jpeg, uint pts) => false;
+
     /// <summary>Messages not yet written (to notice a puck that stopped reading).</summary>
     public abstract int QueuedMessages { get; }
 
@@ -189,6 +195,22 @@ public sealed class WebSocketPuckConnection : PuckConnection
         var bytes = MemoryMarshal.AsBytes(samples).ToArray();
         if (!_outbox.Writer.TryWrite((WebSocketMessageType.Binary, bytes)))
             Close("the puck stopped reading");
+    }
+
+    /// <summary>Binary message: "PVF1", u32 pts (little-endian), then the JPEG (see docs/PROTOCOL.md).</summary>
+    public override bool SendVideoFrame(ReadOnlySpan<byte> jpeg, uint pts)
+    {
+        if (IsClosed || jpeg.Length == 0) return false;
+        var bytes = new byte[8 + jpeg.Length];
+        "PVF1"u8.CopyTo(bytes);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), pts);
+        jpeg.CopyTo(bytes.AsSpan(8));
+        if (!_outbox.Writer.TryWrite((WebSocketMessageType.Binary, bytes)))
+        {
+            Close("the puck stopped reading");
+            return false;
+        }
+        return true;
     }
 
     protected override void CloseTransport()

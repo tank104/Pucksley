@@ -9,6 +9,7 @@
   </ItemGroup>
   <ItemGroup>
     <!-- Local Whisper (whisper.cpp); the Runtime package carries the native CPU libraries for Windows, Linux and macOS. -->
+    <PackageReference Include="SkiaSharp" Version="3.116.1" />
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
   </ItemGroup>

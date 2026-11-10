@@ -422,6 +422,20 @@ public sealed class VoiceSession
     /// </summary>
     async Task SpeakLoopAsync(ChannelReader<string> sentences, CancellationToken cancel)
     {
+        // A talking face (Openspline…) on a puck that can show it: the reply goes through the face
+        if (_speech.Face is { } face && _puck.CanShowVideo)
+        {
+            ITalkingFaceTurn? turn = null;
+            try { turn = await face.BeginTurnAsync(cancel).ConfigureAwait(false); }
+            catch (PluginException e) { _log.LogInformation("Talking face unavailable, speaking without it: {Message}", e.Message); }
+            if (turn is not null)
+            {
+                await using (turn.ConfigureAwait(false))
+                    await SpeakWithFaceAsync(sentences, turn, cancel).ConfigureAwait(false);
+                return;
+            }
+        }
+
         int id = -1;
         var clock = Stopwatch.StartNew();
         double bufferedUntilMs = 0;   // when the puck will run out of audio, on `clock`
@@ -486,6 +500,168 @@ public sealed class VoiceSession
         }
         finally
         {
+            lock (_gate)
+            {
+                if (id >= 0 && _awaitingSpkId == id) _awaitingSpkId = -1;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A reply through the talking face: speech goes to the face service as it's synthesised;
+    /// what comes back (a frame and its audio, 40 ms at a time) streams to the puck, the frame
+    /// stamped with where its audio starts so the puck shows it as that audio plays. If the face
+    /// sends nothing back within a few seconds, the reply plays as plain audio instead.
+    /// </summary>
+    async Task SpeakWithFaceAsync(ChannelReader<string> sentences, ITalkingFaceTurn face, CancellationToken cancel)
+    {
+        const int NoFaceAfterMs = 6000;
+        int id = -1;
+        var clock = Stopwatch.StartNew();
+        double bufferedUntilMs = 0, firstSentMs = -1, spokenMs = 0;
+        uint sent = 0;                                   // samples of this utterance sent to the puck
+        var spoken = new List<short[]>();                // the whole reply, in case the face fails
+        var gotMedia = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool faceFailed = false;
+        int frames = 0;
+        using var faceCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+
+        void Start()
+        {
+            if (id >= 0) return;
+            lock (_gate)
+            {
+                id = ++_spkId;
+                _awaitingSpkId = id;
+                _playbackDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (_state != State.Listening) _state = State.Speaking;
+            }
+            _puck.Send(new JsonObject { ["t"] = "spk", ["a"] = "start", ["id"] = id });
+            _puck.Send(new JsonObject { ["t"] = "ai", ["s"] = "speaking" });
+        }
+
+        async Task PlayAsync(short[] pcm, CancellationToken token)
+        {
+            for (int off = 0; off < pcm.Length; off += FrameSamples)
+            {
+                int n = Math.Min(FrameSamples, pcm.Length - off);
+                double ahead = bufferedUntilMs - clock.Elapsed.TotalMilliseconds;
+                if (ahead > LeadMs) await Task.Delay(TimeSpan.FromMilliseconds(ahead - LeadMs), token).ConfigureAwait(false);
+                bufferedUntilMs = Math.Max(bufferedUntilMs, clock.Elapsed.TotalMilliseconds) + n * 1000.0 / Rate;
+                _puck.SendAudio(pcm.AsSpan(off, n));
+                sent += (uint)n;
+            }
+        }
+
+        var forward = Task.Run(async () =>
+        {
+            var decimate = new Decimator();
+            await foreach (var media in face.ReadAsync(faceCts.Token).ConfigureAwait(false))
+            {
+                gotMedia.TrySetResult();
+                Start();
+                var pcm = media.SampleRate == Rate ? media.Audio
+                    : media.SampleRate == Rate * Decimator.Factor ? decimate.Process(media.Audio)
+                    : throw new PluginException($"The face sent {media.SampleRate} Hz audio");
+                if (media.Jpeg.Length > 0 && _puck.SendVideoFrame(media.Jpeg, sent)) frames++;
+                await PlayAsync(pcm, faceCts.Token).ConfigureAwait(false);
+            }
+        }, CancellationToken.None);
+
+        try
+        {
+            await foreach (var sentence in sentences.ReadAllAsync(cancel).ConfigureAwait(false))
+            {
+                IAsyncEnumerable<short[]> audio;
+                try { audio = _speech.SynthesizeAsync(sentence, cancel); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    _log.LogWarning(e, "Speech synthesis failed");
+                    continue;
+                }
+                try
+                {
+                    await foreach (var chunk in audio.ConfigureAwait(false))
+                    {
+                        spoken.Add(chunk);
+                        spokenMs += chunk.Length * 1000.0 / Rate;
+                        if (faceFailed) continue;
+                        try
+                        {
+                            await face.SendAudioAsync(chunk, Rate, cancel).ConfigureAwait(false);
+                            if (firstSentMs < 0) firstSentMs = clock.Elapsed.TotalMilliseconds;
+                        }
+                        catch (PluginException e)
+                        {
+                            _log.LogWarning("Talking face failed: {Message}", e.Message);
+                            faceFailed = true;
+                        }
+                        if (!gotMedia.Task.IsCompleted && firstSentMs >= 0 && clock.Elapsed.TotalMilliseconds - firstSentMs > NoFaceAfterMs) faceFailed = true;
+                    }
+                }
+                catch (Exception e) when (e is PluginException or HttpRequestException)
+                {
+                    _log.LogWarning("Speech synthesis failed: {Message}", e.Message);
+                }
+            }
+
+            if (!faceFailed)
+            {
+                try { await face.EndAsync(cancel).ConfigureAwait(false); }
+                catch (PluginException e)
+                {
+                    _log.LogWarning("Talking face failed: {Message}", e.Message);
+                    faceFailed = true;
+                }
+            }
+            if (!faceFailed && !gotMedia.Task.IsCompleted)
+            {
+                var first = await Task.WhenAny(gotMedia.Task, Task.Delay(NoFaceAfterMs, cancel)).ConfigureAwait(false);
+                if (first != gotMedia.Task) faceFailed = true;
+            }
+
+            if (!gotMedia.Task.IsCompleted)
+            {
+                // Nothing came back from the face: say it plainly
+                if (spoken.Count > 0) _log.LogWarning("Talking face sent nothing back; speaking without it");
+                await face.InterruptAsync().ConfigureAwait(false);
+                faceCts.Cancel();
+                foreach (var chunk in spoken)
+                {
+                    Start();
+                    await PlayAsync(chunk, cancel).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                // The face plays out the rest of the reply (bounded, in case the service stalls)
+                var limit = TimeSpan.FromMilliseconds(spokenMs + 10000);
+                if (await Task.WhenAny(forward, Task.Delay(limit, cancel)).ConfigureAwait(false) != forward)
+                    _log.LogWarning("Talking face stalled; ending the reply");
+                cancel.ThrowIfCancellationRequested();
+            }
+
+            if (id >= 0)
+            {
+                _puck.Send(new JsonObject { ["t"] = "spk", ["a"] = "end", ["id"] = id });
+                _puck.Send(new JsonObject { ["t"] = "fv", ["a"] = "end" });   // the talking face is done: back to the usual face
+                _log.LogDebug("Talking face: {Frames} frames for {Seconds:0.0} s of speech", frames, sent / (double)Rate);
+                var remaining = Math.Max(0, bufferedUntilMs - clock.Elapsed.TotalMilliseconds);
+                var done = _playbackDone?.Task ?? Task.CompletedTask;
+                await Task.WhenAny(done, Task.Delay(TimeSpan.FromMilliseconds(remaining + 2500), cancel)).ConfigureAwait(false);
+                cancel.ThrowIfCancellationRequested();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            await face.InterruptAsync().ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            faceCts.Cancel();
+            try { await forward.ConfigureAwait(false); }
+            catch (Exception e) when (e is OperationCanceledException or PluginException) { }
             lock (_gate)
             {
                 if (id >= 0 && _awaitingSpkId == id) _awaitingSpkId = -1;

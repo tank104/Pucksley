@@ -12,6 +12,7 @@
 #include <string>
 #include "../config.h"
 #include "../hal.h"
+#include "../face_video.h"
 #include "../hub.h"
 #include "../model.h"
 #include "internal.h"
@@ -469,6 +470,9 @@ void onLine(uint8_t tp, char* line, size_t len) {
     g_model.notifyAt = millis();
     if (g_model.notifyChime) hal::beep(Tone::Chime);
     model_mark(D_NOTIFY);
+  } else if (!strcmp(t, "fv")) {
+    // the talking face: the reply is over (what's queued still plays)
+    if (!strcmp(doc["a"] | "", "end")) face_video::end();
   } else if (!strcmp(t, "confirm")) {
     g_model.confirmActive = true;
     MODEL_SET(g_model.confirmId, doc["id"] | "");

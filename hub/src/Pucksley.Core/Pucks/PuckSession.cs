@@ -119,7 +119,18 @@ public sealed class PuckSession
         Rssi = Int(hello, "rssi") ?? Rssi;
         Ssid = Str(hello, "ssid") ?? Ssid;
         Face = Str(hello, "face") ?? Face;
+        if (hello["caps"] is JsonArray caps)
+            Capabilities = caps.Select(c => c is JsonValue v && v.TryGetValue<string>(out var s) ? s : null).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
+
+    /// <summary>What the puck says it can do ("mic", "spk", "video"…).</summary>
+    public IReadOnlySet<string> Capabilities { get; private set; } = new HashSet<string>();
+
+    /// <summary>It can show a talking face: its firmware plays video frames, and it's on Wi-Fi (USB is too slow for them).</summary>
+    public bool CanShowVideo => Capabilities.Contains("video") && Primary is { Kind: "wifi" };
+
+    /// <summary>A talking-face frame over the primary link (see <see cref="PuckConnection.SendVideoFrame"/>).</summary>
+    public bool SendVideoFrame(ReadOnlySpan<byte> jpeg, uint pts) => Primary?.SendVideoFrame(jpeg, pts) ?? false;
 
     /// <summary>A message from the puck (already welcomed).</summary>
     internal void Handle(PuckConnection from, JsonObject m)

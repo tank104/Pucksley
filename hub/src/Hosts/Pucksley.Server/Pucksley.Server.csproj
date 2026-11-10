@@ -14,4 +14,7 @@
     <ProjectReference Include="..\..\Plugins\Pucksley.Plugins.Utility\Pucksley.Plugins.Utility.csproj" />
     <ProjectReference Include="..\..\Plugins\Pucksley.Plugins.Speech\Pucksley.Plugins.Speech.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.116.1" />
+  </ItemGroup>
 </Project>

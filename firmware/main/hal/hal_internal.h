@@ -51,6 +51,8 @@ void lcdBrightness(uint8_t value);          // 0..255
 void lvglBegin();
 void lvglSetPanelAwake(bool awake);         // while asleep, flushes are dropped (panel RAM is redrawn on wake)
 void lvglRedrawNow();                       // invalidate everything and render it synchronously
+// LVGL's two DMA draw buffers, for code that has the panel to itself while LVGL is paused
+void* lvglDrawBuffer(int which, size_t* bytes);
 
 // ---- input plumbing (input.cpp)
 void inputBegin();                          // the queue; call before any post

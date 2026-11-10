@@ -19,6 +19,7 @@
 #include <mbedtls/base64.h>
 #include <mdns.h>
 #include "../config.h"
+#include "../face_video.h"
 #include "../hal.h"
 #include "../model.h"
 #include "internal.h"
@@ -161,6 +162,7 @@ size_t buildHello(char* buf, size_t len) {
   JsonArray caps = d["caps"].to<JsonArray>();
   caps.add("mic");
   caps.add("spk");
+  caps.add("video");  // talking-face frames (face_video.h)
   return serializeJson(d, buf, len);
 }
 
@@ -218,6 +220,7 @@ void handleIncoming(uint8_t tp, const char* data, size_t len) {
       hal::speakerEnd(id);
     } else if (strcmp(a, "stop") == 0) {
       hal::speakerStop();
+      face_video::stop();
     }
     return;
   }
@@ -255,6 +258,9 @@ void speechBytes(const uint8_t* p, size_t n) {
   }
 }
 
+enum class Bin : uint8_t { Speech, Frame, Skip };
+Bin s_wsBinary = Bin::Speech;  // what the binary message now arriving is
+
 void onWsEvent(void*, esp_event_base_t, int32_t id, void* event) {
   auto* d = (esp_websocket_event_data_t*)event;
   switch (id) {
@@ -275,7 +281,16 @@ void onWsEvent(void*, esp_event_base_t, int32_t id, void* event) {
     case WEBSOCKET_EVENT_DATA: {
       if (!d || d->data_len <= 0) break;
       if (d->op_code == 0x2) {
-        speechBytes((const uint8_t*)d->data_ptr, d->data_len);
+        // Binary: speech, or a talking-face frame ("PVF1" + pts + JPEG) arriving in pieces
+        const auto* p = (const uint8_t*)d->data_ptr;
+        if (d->payload_offset == 0) {
+          bool frame = d->data_len >= 8 && memcmp(p, "PVF1", 4) == 0;
+          s_wsBinary = !frame ? Bin::Speech
+                     : face_video::frameStart(d->payload_len > 0 ? (size_t)d->payload_len : (size_t)d->data_len) ? Bin::Frame
+                     : Bin::Skip;
+        }
+        if (s_wsBinary == Bin::Frame) face_video::frameData(p, d->data_len);
+        else if (s_wsBinary == Bin::Speech) speechBytes(p, d->data_len);
       } else if (d->op_code == 0x1 || (d->op_code == 0x0 && s_wsText)) {
         // text: may arrive in pieces (payload_offset / payload_len)
         size_t total = d->payload_len > 0 ? (size_t)d->payload_len : (size_t)d->data_len;

@@ -71,6 +71,11 @@ void lvglBegin() {
 
 void lvglSetPanelAwake(bool awake) { s_panelAwake = awake; }
 
+void* lvglDrawBuffer(int which, size_t* bytes) {
+  if (bytes) *bytes = kBufPixels * sizeof(lv_color_t);
+  return which == 0 ? s_drawBuf.buf1 : s_drawBuf.buf2;
+}
+
 void lvglRedrawNow() {
   lv_disp_t* disp = lv_disp_get_default();
   if (!disp) return;

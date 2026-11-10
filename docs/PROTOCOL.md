@@ -17,6 +17,8 @@ Both transports carry the same JSON messages. Every message is a JSON object wit
 - **Binary frames** carry audio: raw PCM, signed 16-bit little-endian, mono, **16 000 Hz**.
   - puck → hub binary = microphone audio (only while listening)
   - hub → puck binary = speech to play (only between `spk start` and `spk end`)
+  - hub → puck binary starting `PVF1` = a talking-face video frame (see [Talking face](#talking-face)); only to
+    pucks whose `hello` lists the `video` capability
   - Frames are any whole number of samples; the puck sends 20 ms (640 bytes), the hub sends 20–60 ms.
 - Finding the hub: the puck browses mDNS for `_pucksley._tcp` (TXT `path=/puck`, `id=<hub id>`, `v=1`),
   unless a hub URL was set in its Wi-Fi setup page or sent with `hubaddr`.
@@ -38,7 +40,7 @@ When both transports are up, the hub prefers Wi-Fi for audio and keeps USB for s
 1. Puck → hub:
    ```json
    {"t":"hello","v":1,"fw":"1.0.0","id":"a1b2c3d4e5f60708","name":"Puck-1D4D","token":"<token or empty>",
-    "bat":87,"chg":false,"usb":true,"ip":"192.168.1.50","rssi":-55,"ssid":"Home","face":"assistant","caps":["mic","spk"]}
+    "bat":87,"chg":false,"usb":true,"ip":"192.168.1.50","rssi":-55,"ssid":"Home","face":"assistant","caps":["mic","spk","video"]}
    ```
    `id` is derived from the chip's MAC and never changes. `token` is what this hub gave the puck
    last time (empty on first contact).
@@ -88,6 +90,27 @@ hub   {"t":"ai","s":"idle"}                         (or {"t":"listen"} for a fol
 | `spk` | H→P | `a`: `start`/`end`/`stop`; `id` | Speech audio follows / no more audio for `id` (play out what's buffered) / stop now and flush. |
 | `spk` | P→H | `s`: `done`; `id` | The puck finished playing utterance `id` (or it was stopped). |
 | `listen` | H→P | | Start listening as if tapped (follow-up question). The puck replies with `talk start` `via:"hub"`. |
+
+## Talking face
+
+When a face plugin (Openspline) is ready and the puck is on Wi-Fi with the `video` capability, a reply's
+speech goes through the face service, and the hub streams frames along with the audio:
+
+```
+hub   {"t":"spk","a":"start","id":8}
+hub   <binary "PVF1" + pts + JPEG>                 a frame, then its 40 ms of audio, and so on
+hub   <binary speech frames …>
+hub   {"t":"spk","a":"end","id":8}
+hub   {"t":"fv","a":"end"}                          no more frames: the puck plays out what it has
+```
+
+- **Frame message** (binary): `PVF1`, then `pts` as u32 little-endian, then a baseline JPEG. `pts` is the position
+  in utterance `id`'s audio, in samples, where the frame belongs: the puck shows it when its speaker gets there and
+  skips frames it's too late for. The hub sends 464 × 464 (quality 70, the background black, cut to the circle);
+  the puck takes any size that's a multiple of 8, at least 464, and shows the centre 464 × 464.
+- The puck takes the whole screen for the frames and gives it back after `fv end` once the audio has played out,
+  after 1.5 s without frames or audio, or on `spk stop`. A tap or the button during it sends `talk cancel`.
+- No `video` capability, USB only, or the face service sending nothing within 6 s: the reply plays as plain audio.
 
 ## Puck state and settings
 

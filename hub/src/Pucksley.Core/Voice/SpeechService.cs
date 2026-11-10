@@ -23,6 +23,9 @@ public sealed partial class SpeechService(SettingsStore settings, PluginManager 
         }
     }
 
+    /// <summary>A talking-face plugin that's ready (Openspline…), or null: replies play as plain audio.</summary>
+    public ITalkingFace? Face => plugins.GetPlugin<ITalkingFace>() is { IsReady: true } face ? face : null;
+
     public ITextToSpeech? Tts
     {
         get
