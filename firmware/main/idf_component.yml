@@ -1,0 +1,7 @@
+## Components from the ESP Component Registry (downloaded into managed_components/ on first build)
+dependencies:
+  idf: ">=5.3"
+  lvgl/lvgl: "8.4.0"
+  espressif/esp_websocket_client: "^1.4.0"
+  espressif/mdns: "^1.8.0"
+  bblanchon/arduinojson: "^7.2.1"

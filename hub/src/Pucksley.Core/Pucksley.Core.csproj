@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The hub: pucks (Wi-Fi WebSocket + USB serial), voice pipeline, Claude, plugins, web page. Cross-platform. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pucksley.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Anthropic" Version="13.6.0" />
+    <PackageReference Include="Makaretu.Dns.Multicast.New" Version="0.38.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Pucksley.Sdk\Pucksley.Sdk.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot\**\*" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pucksley.Core.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f8f7f4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1a1918" media="(prefers-color-scheme: dark)">
+  <title>Pucksley</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Apply a chosen theme before anything paints (otherwise the system's theme is used).
+    try {
+      var t = JSON.parse(localStorage.getItem('puck.theme') || 'null');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { /* no storage */ }
+  </script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div id="app" class="app" aria-busy="true">
+    <div class="boot">
+      <div class="boot-orb"></div>
+      <p>Connecting to the hub…</p>
+    </div>
+  </div>
+  <noscript>
+    <p style="font-family: system-ui, sans-serif; padding: 24px;">The Pucksley hub page needs JavaScript turned on.</p>
+  </noscript>
+</body>
+</html>

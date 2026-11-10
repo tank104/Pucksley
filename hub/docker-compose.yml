@@ -1,0 +1,19 @@
+# Pucksley hub as an always-on container. Host networking matters: pucks find the hub by mDNS,
+# Sonos speakers are found by SSDP multicast, and both need to see the LAN directly.
+services:
+  pucksley-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pucksley-hub
+    container_name: pucksley-hub
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - TZ=Pacific/Auckland
+      # The LAN address other devices use to reach the hub (Sonos fetching announcements).
+      # Set it if the container picks the wrong interface:
+      # - PUCKSLEY_LAN_ADDRESS=192.168.1.20
+      # - PUCKSLEY_PORT=8765
+    volumes:
+      - ./pucksley-data:/data

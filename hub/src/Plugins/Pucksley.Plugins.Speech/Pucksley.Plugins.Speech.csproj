@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Speech engines: OpenAI (and compatible servers), ElevenLabs, Azure AI Speech, local Whisper, Piper. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pucksley.Plugins.Speech</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Pucksley.Sdk\Pucksley.Sdk.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Local Whisper (whisper.cpp); the Runtime package carries the native CPU libraries for Windows, Linux and macOS. -->
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pucksley.Plugins.Speech.Tests" />
+  </ItemGroup>
+</Project>

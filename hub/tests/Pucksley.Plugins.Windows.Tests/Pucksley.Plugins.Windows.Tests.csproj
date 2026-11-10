@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Tests for the Windows plugins. Logic runs against fakes; tests in the "Live" category only READ
+       this PC's state (volume, outputs, now playing, apps, voices, a screenshot kept in memory) and never
+       change anything: no volume changes, key presses, app launches or power actions.
+       To skip them, run the tests with the filter Category!=Live. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Plugins\Pucksley.Plugins.Windows\Pucksley.Plugins.Windows.csproj" />
+    <ProjectReference Include="..\Pucksley.TestSupport\Pucksley.TestSupport.csproj" />
+  </ItemGroup>
+</Project>

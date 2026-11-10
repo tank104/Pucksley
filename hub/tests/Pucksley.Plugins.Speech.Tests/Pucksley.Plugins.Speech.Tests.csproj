@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Tests for the speech engines. Cloud engines run against a recording HttpMessageHandler (exact request shape) or a
+    tiny local HTTP server (real chunked streaming). The Whisper integration tests (Category=Integration) download
+    ggml-tiny.en.bin (~75 MB) into %TEMP%\pucksley-speech-tests once and skip when offline or not on Windows.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pucksley.Plugins.Speech.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Plugins\Pucksley.Plugins.Speech\Pucksley.Plugins.Speech.csproj" />
+    <ProjectReference Include="..\Pucksley.TestSupport\Pucksley.TestSupport.csproj" />
+  </ItemGroup>
+</Project>

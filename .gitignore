@@ -1,0 +1,26 @@
+# hub (.NET)
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+hub/publish/
+hub/pucksley-data/
+
+# firmware (ESP-IDF)
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock
+firmware/build_log.txt
+firmware/tools/sim/build/
+firmware/tools/sim/out/
+firmware/tools/test/build/
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+dist/
