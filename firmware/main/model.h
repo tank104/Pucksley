@@ -119,6 +119,7 @@ struct Model {
   bool flip = false;
   int spk = 70;                 // speaker volume 0..100
   int micGain = 30;             // dB 0..37
+  bool barge = true;            // talking over the puck while it speaks interrupts it
   bool lift = true;             // lift to talk
 
   // ---- power

@@ -61,8 +61,8 @@ void create() {
   at(icon, CX, CY - 70);
   lv_obj_t* title = label(s_power, &nunito_40, COL_WHITE, "Power off?");
   at(title, CX, CY + 48);
-  hintLabel(s_power, "Hold to power off", CY + 96);
-  hintLabel(s_power, "Tap to cancel");
+  hintLabel(s_power, "Press the button again to power off", CY + 96);
+  hintLabel(s_power, "Tap the screen to cancel");
   hide(s_power, true);
 }
 
@@ -129,9 +129,15 @@ void powerInput(const InputEvent& e) {
       hal::powerOff();
       powerClose();  // if we're still here, the PMU said no
       break;
-    case Ev::Tap:
     case Ev::Button:
     case Ev::ButtonLong:
+      // The button again: that's a yes
+      arcSpan(s_holdRing, 0, 360);
+      hal::beep(Tone::Select);
+      hal::powerOff();
+      powerClose();  // if we're still here, the PMU said no
+      break;
+    case Ev::Tap:
       powerClose();
       break;
     default:

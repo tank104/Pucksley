@@ -68,9 +68,17 @@ public sealed class AssistantSettings
     [Setting("Web search", Order = 5, Help = "Let Claude search the web and read pages for up-to-date answers.")]
     public bool WebSearch { get; set; } = true;
 
-    [Setting("Keep listening after a question", Order = 6,
-        Help = "When Claude ends with a question, the puck listens for your answer without a tap.")]
+    [Setting("Keep the conversation going", Order = 6,
+        Help = "After an answer the puck listens a few seconds for your reply, so you can just keep talking. It goes quiet by itself if you don't, or when you say thanks. Off: tap to talk each time.")]
     public bool FollowUpListening { get; set; } = true;
+
+    [Setting("Only keep listening after a question", Order = 9, Advanced = true,
+        Help = "Listen for a reply only when the answer ends with a question.")]
+    public bool FollowUpOnlyAfterQuestions { get; set; }
+
+    [Setting("How long to wait for a reply (s)", Order = 10, Advanced = true,
+        Help = "After an answer, how long the puck listens for you to carry on before going quiet.")]
+    public int FollowUpSeconds { get; set; } = 6;
 
     [Setting("Forget the conversation after (minutes)", Order = 7,
         Help = "After this long without talking, the next question starts a fresh conversation.")]
@@ -165,6 +173,10 @@ public sealed class VoiceSettings
     [Setting("Longest question (s)", Order = 6, Advanced = true)]
     public int MaxListenSeconds { get; set; } = 30;
 
+    [Setting("Recognise speech as you talk", Order = 8, Advanced = true,
+        Help = "With an engine that can (Deepgram), words are recognised while you're still talking: it knows when you've finished from what you say rather than how loud the room is, and the answer starts sooner.")]
+    public bool LiveRecognition { get; set; } = true;
+
     [Setting("Speech sensitivity", Order = 7, Advanced = true,
         Help = "How much louder than the room speech must be (1.5 – 6). Lower hears quieter voices; higher ignores more noise.")]
     public double VadSensitivity { get; set; } = 3.0;
@@ -221,6 +233,9 @@ public sealed class PuckRecord
 
     [Setting("Lift to talk", Order = 5, Help = "Pick the puck up to talk, put it down when done.")]
     public bool LiftToTalk { get; set; } = true;
+
+    [Setting("Interrupt by talking", Order = 5, Help = "Start talking while it's speaking and it stops to listen (as well as a tap). Turn off if it stops itself in a noisy room.")]
+    public bool TalkOver { get; set; } = true;
 
     [Setting("Screen brightness", Order = 6)]
     public int Brightness { get; set; } = 80;

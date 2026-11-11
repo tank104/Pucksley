@@ -162,6 +162,9 @@ uint8_t TouchDrvCST92xx::getPoint(int16_t *x_array, int16_t *y_array, uint8_t ge
     }
 
     numPoints = (read_buffer[5] & 0x7F);
+    lastCount = numPoints;
+    lastState = read_buffer[0] & 0x0F;
+    memcpy(lastReport, read_buffer, sizeof lastReport);
     if (numPoints > CST92XX_MAX_FINGER_NUM || numPoints == 0) {
         lastRead = numPoints == 0 ? ReadNoPoints : ReadNoAck;
         return 0;

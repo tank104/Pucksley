@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
@@ -11,10 +12,15 @@ using Pucksley.Sdk;
 namespace Pucksley.Core.Pucks;
 
 /// <summary>
-/// One puck's conversation loop: listen (mic audio + end-of-speech detection) → transcribe → ask
-/// Claude (streamed) → speak it sentence by sentence on the puck's speaker → idle, or listen again
-/// when Claude asked a question. A tap while it's thinking or speaking interrupts.
+/// One puck's conversation loop: listen → transcribe → ask Claude (streamed) → speak it sentence
+/// by sentence on the puck's speaker → listen again for a reply (or idle). A tap while it's
+/// thinking or speaking interrupts.
 /// </summary>
+/// <remarks>
+/// With a live engine (<see cref="IStreamingSpeechToText"/>) the words are recognised while the
+/// person talks, and the engine says when they've finished; otherwise the mic audio is recorded,
+/// a loudness detector notices the end, and the recording is transcribed.
+/// </remarks>
 public sealed class VoiceSession
 {
     enum State { Idle, Listening, Thinking, Speaking }
@@ -39,6 +45,18 @@ public sealed class VoiceSession
     int _spkId;
     TaskCompletionSource? _playbackDone;
     int _awaitingSpkId = -1;
+
+    // Live recognition of the current listen (null: none, or it hasn't connected yet)
+    ISpeechStream? _stream;
+    int _listenGen;                  // which listen a stream that connects late belongs to
+    bool _followUp;                  // this listen is the puck carrying on after an answer
+    string _shownWords = "";
+    long _shownWordsAt;
+
+    // What the puck has been saying this reply (to tell its own voice, heard back, from someone
+    // talking over it), and what it was saying when someone did
+    readonly StringBuilder _spoken = new();
+    string? _talkedOver;
 
     public VoiceSession(PuckSession puck, AgentService agent, SpeechService speech, SettingsStore settings, ILogger log)
     {
@@ -78,7 +96,9 @@ public sealed class VoiceSession
                 var take = samples.Length <= room ? samples : samples[..room];
                 _audio.AddRange(take);
                 _vad.Process(take);
-                if (v.AutoEndOfSpeech && _vad.SpeechEnded) end = true;
+                _stream?.Send(take);
+                // With live recognition the engine says when they've finished (OnWords, Tick)
+                if (v.AutoEndOfSpeech && _vad.SpeechEnded && !LiveLocked) end = true;
                 if (_audio.Count >= max) end = true;
             }
         }
@@ -99,22 +119,64 @@ public sealed class VoiceSession
     /// <summary>About four times a second: listening timeouts.</summary>
     public void Tick()
     {
-        bool giveUp = false;
+        bool giveUp = false, endNow = false;
         lock (_gate)
         {
             if (_state != State.Listening) return;
             var v = _settings.Current.Voice;
+            // Carrying on after an answer: a few seconds for them to reply, then quietly stop.
             // Holding the puck up to talk: give them longer to start (it could also have been picked
-            // up just to move it, so don't wait forever and leave it listening in someone's bag)
-            double limit = Math.Clamp(v.NoSpeechTimeoutSeconds, 3, 30) + (_listenVia == "lift" ? LiftGraceSeconds : 0);
-            if (!_vad.SpeechStarted && _listenClock.Elapsed.TotalSeconds > limit) giveUp = true;
+            // up just to move it, so don't wait forever and leave it listening in someone's bag).
+            double limit = _followUp
+                ? Math.Clamp(_settings.Current.Assistant.FollowUpSeconds, 2, 30)
+                : Math.Clamp(v.NoSpeechTimeoutSeconds, 3, 30) + (_listenVia == "lift" ? LiftGraceSeconds : 0);
+            double elapsed = _listenClock.Elapsed.TotalSeconds;
+            if (LiveLocked)
+            {
+                bool words = _stream!.Text.Length > 0;
+                // Sound right now (words lag it a little): don't cut someone off as they start
+                bool soundNow = _vad.SpeechStarted && _audio.Count - _vad.LastSpeechSample < Rate;
+                if (!words && elapsed > limit && (!soundNow || elapsed > limit + 4)) giveUp = true;
+                // Words, but no word from the engine that they've finished (noise after them...):
+                // a long quiet after the last loud moment is enough
+                else if (words && _vad.SpeechEnded && _audio.Count - _vad.LastSpeechSample > Rate * 5 / 2) endNow = true;
+            }
+            else if (!_vad.SpeechStarted && elapsed > limit) giveUp = true;
+
+            // No words, but there was sound and they asked (a tap): try what was heard, so a
+            // mumble gets a "didn't catch that" rather than silence
+            if (giveUp && !_followUp && _vad.SpeechStarted)
+            {
+                giveUp = false;
+                endNow = true;
+            }
+            if (giveUp)
+            {
+                _state = State.Idle;
+                DropStreamLocked();
+                _audio.Clear();
+            }
+        }
+        if (endNow)
+        {
+            StopListening("no clear words");
+            return;
         }
         if (giveUp)
         {
             _log.LogInformation("{Puck}: heard nothing, stopped listening", _puck.Name);
-            lock (_gate) _state = State.Idle;
             _puck.Send(new JsonObject { ["t"] = "ai", ["s"] = "idle" });
         }
+    }
+
+    /// <summary>Live recognition is going (connected and working) for this listen.</summary>
+    bool LiveLocked => _stream is { Failed: false };
+
+    void DropStreamLocked()
+    {
+        var stream = _stream;
+        _stream = null;
+        if (stream is not null) _ = stream.DisposeAsync().AsTask();
     }
 
     /// <summary>The puck went away: stop whatever was going on.</summary>
@@ -124,6 +186,7 @@ public sealed class VoiceSession
         {
             _turn?.Cancel();
             _state = State.Idle;
+            DropStreamLocked();
             _playbackDone?.TrySetResult();
         }
     }
@@ -132,26 +195,100 @@ public sealed class VoiceSession
 
     void StartListening(string via)
     {
+        int gen;
+        var v = _settings.Current.Voice;
         lock (_gate)
         {
+            // Talked over: remember what it was saying, in case what's heard is only that
+            _talkedOver = via == "voice" ? _spoken.ToString() : null;
             if (_state is State.Thinking or State.Speaking) InterruptLocked();
+            DropStreamLocked();
             _state = State.Listening;
             _audio.Clear();
-            var v = _settings.Current.Voice;
             _vad = new VoiceActivityDetector(v.VadSensitivity, v.EndSilenceMs);
             _listenVia = via;
+            // The hub asked the puck to listen (carrying on after an answer), or the person talked
+            // over it ("voice"): if nothing clear is said, quietly stop rather than say sorry
+            _followUp = via is "hub" or "voice";
+            _shownWords = "";
             _listenClock.Restart();
+            gen = ++_listenGen;
         }
         _puck.Send(new JsonObject { ["t"] = "ai", ["s"] = "listening" });
+        if (v.LiveRecognition && _speech.Stt is IStreamingSpeechToText live) _ = OpenStreamAsync(live, gen);
+    }
+
+    /// <summary>Connects live recognition for listen <paramref name="gen"/>; meanwhile the audio is kept, and sent once it's up.</summary>
+    async Task OpenStreamAsync(IStreamingSpeechToText engine, int gen)
+    {
+        ISpeechStream? stream = null;
+        var started = Stopwatch.StartNew();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            var v = _settings.Current.Voice;
+            var lang = string.IsNullOrWhiteSpace(v.Language) ? null : v.Language.Trim();
+            stream = await engine.StartStreamAsync(new SpeechStreamOptions(lang, v.EndSilenceMs), cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            _log.LogInformation("{Puck}: live recognition unavailable ({Message}); recording instead", _puck.Name, e.Message);
+        }
+        if (stream is null) return;
+        bool keep;
+        lock (_gate)
+        {
+            keep = _state == State.Listening && _listenGen == gen && _stream is null;
+            if (keep)
+            {
+                _stream = stream;
+                stream.Changed += () => OnWords(stream);
+                // What was heard while it connected
+                if (_audio.Count > 0) stream.Send(CollectionsMarshal.AsSpan(_audio));
+            }
+        }
+        if (!keep) await stream.DisposeAsync().ConfigureAwait(false);
+        else _log.LogDebug("{Puck}: live recognition up in {Ms} ms", _puck.Name, started.ElapsedMilliseconds);
+    }
+
+    /// <summary>Live recognition heard more (or finished, or failed).</summary>
+    void OnWords(ISpeechStream stream)
+    {
+        bool end = false;
+        string? show = null;
+        lock (_gate)
+        {
+            if (_state != State.Listening || !ReferenceEquals(_stream, stream)) return;
+            if (stream.Ended) end = true;
+            // The words so far, for the screen (a few times a second at most)
+            var text = stream.Text;
+            long now = _listenClock.ElapsedMilliseconds;
+            if (!end && text.Length > 0 && text != _shownWords && now - _shownWordsAt >= 150)
+            {
+                _shownWords = text;
+                _shownWordsAt = now;
+                show = text;
+            }
+        }
+        if (show is not null) _puck.Send(new JsonObject { ["t"] = "heard", ["text"] = Clip(show, 300), ["partial"] = true });
+        if (end) StopListening("finished");
     }
 
     void StopListening(string why)
     {
         short[] clip;
+        ISpeechStream? stream;
+        bool followUp, heardSound;
+        string? talkedOver;
         lock (_gate)
         {
             if (_state != State.Listening) return;
             _state = State.Thinking;
+            stream = _stream;
+            _stream = null;
+            followUp = _followUp;
+            heardSound = _vad.SpeechStarted;
+            talkedOver = _talkedOver;
             // Trim silence before and after the speech (keeps transcription quick and avoids
             // engines hallucinating words into silence); a tap with no detected speech keeps it all.
             int start = 0, end = _audio.Count;
@@ -166,16 +303,22 @@ public sealed class VoiceSession
             _turn = new CancellationTokenSource();
         }
         _puck.Send(new JsonObject { ["t"] = "ai", ["s"] = "thinking" });
-        _log.LogInformation("{Puck}: heard {Seconds:0.0} s ({Why})", _puck.Name, clip.Length / (double)Rate, why);
+        _log.LogInformation("{Puck}: heard {Seconds:0.0} s ({Why}{Live})", _puck.Name, clip.Length / (double)Rate, why,
+            stream is { Failed: false } ? ", live" : "");
         var cts = _turn;
-        _ = Task.Run(() => RunTurnAsync(clip, cts.Token));
+        var heard = new Heard(clip, stream, followUp, heardSound, talkedOver);
+        _ = Task.Run(() => RunTurnAsync(heard, cts.Token));
     }
+
+    /// <summary>What a listen brought back: the recording, the live recognition (if any), and how it came about.</summary>
+    sealed record Heard(short[] Clip, ISpeechStream? Stream, bool FollowUp, bool Sound, string? TalkedOver);
 
     void Cancel()
     {
         lock (_gate)
         {
             InterruptLocked();
+            DropStreamLocked();
             _state = State.Idle;
             _audio.Clear();
         }
@@ -193,18 +336,41 @@ public sealed class VoiceSession
 
     // ------------------------------------------------------------------ a turn
 
-    async Task RunTurnAsync(short[] clip, CancellationToken cancel)
+    async Task RunTurnAsync(Heard heard, CancellationToken cancel)
     {
+        var clip = heard.Clip;
         try
         {
-            if (clip.Length < Rate / 4)
+            string? transcript = null;
+            var sw = Stopwatch.StartNew();
+            bool live = false;
+            // Live: the words are in already; the engine only has to finish the last ones
+            if (heard.Stream is { } stream)
             {
-                await NothingHeardAsync(cancel).ConfigureAwait(false);
+                await using (stream.ConfigureAwait(false))
+                {
+                    if (!stream.Failed)
+                    {
+                        try
+                        {
+                            transcript = await stream.FinishAsync(cancel).ConfigureAwait(false);
+                            live = true;
+                        }
+                        catch (Exception e) when (e is not OperationCanceledException || !cancel.IsCancellationRequested)
+                        {
+                            _log.LogInformation("{Puck}: live recognition didn't finish ({Message}); transcribing the recording", _puck.Name, e.Message);
+                        }
+                    }
+                }
+            }
+
+            if (transcript is null && clip.Length < Rate / 4)
+            {
+                await NothingHeardAsync(heard, cancel).ConfigureAwait(false);
                 return;
             }
 
-            string transcript;
-            var sw = Stopwatch.StartNew();
+            if (transcript is null)
             using (var sttTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancel))
             {
                 sttTimeout.CancelAfter(TimeSpan.FromSeconds(30));
@@ -229,15 +395,29 @@ public sealed class VoiceSession
                     return;
                 }
             }
-            _log.LogInformation("{Puck} heard \"{Text}\" ({Ms} ms)", _puck.Name, transcript, sw.ElapsedMilliseconds);
+            _log.LogInformation("{Puck} heard \"{Text}\" ({Ms} ms{Live})", _puck.Name, transcript, sw.ElapsedMilliseconds, live ? " after they stopped, live" : "");
             if (string.IsNullOrWhiteSpace(transcript))
             {
-                await NothingHeardAsync(cancel).ConfigureAwait(false);
+                await NothingHeardAsync(heard, cancel).ConfigureAwait(false);
                 return;
             }
             _puck.Send(new JsonObject { ["t"] = "heard", ["text"] = Clip(transcript, 300) });
 
             var lower = transcript.Trim().TrimEnd('.', '!', '?').ToLowerInvariant();
+            // Talked over, but what was heard is the puck's own voice coming back: nobody spoke
+            if (heard.TalkedOver is { } said && IsOwnVoice(transcript, said))
+            {
+                _log.LogInformation("{Puck}: that was its own voice, not someone talking over it", _puck.Name);
+                FinishTurn(false);
+                return;
+            }
+            // "Stop", "wait": it has stopped talking; nothing to answer
+            if (lower is "stop" or "stop it" or "stop talking" or "wait" or "hang on" or "hold on" or "shush" or "shh" or "quiet"
+                or "be quiet" or "enough" or "ok stop" or "okay stop" or "pause")
+            {
+                FinishTurn(false);
+                return;
+            }
             if (lower is "never mind" or "nevermind" or "cancel" or "forget it" or "nothing")
             {
                 await SpeakOnlyAsync("Okay.", cancel).ConfigureAwait(false);
@@ -252,7 +432,7 @@ public sealed class VoiceSession
                 return;
             }
 
-            await AnswerAsync(transcript, cancel).ConfigureAwait(false);
+            await AnswerAsync(transcript, EndsConversation(lower), cancel).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
@@ -265,7 +445,39 @@ public sealed class VoiceSession
         }
     }
 
-    async Task AnswerAsync(string transcript, CancellationToken cancel)
+    /// <summary>
+    /// Whether <paramref name="heard"/> is just some of what the puck was saying (<paramref name="said"/>),
+    /// heard back through its own mic: a few words, nearly all of them from what it said.
+    /// </summary>
+    internal static bool IsOwnVoice(string heard, string said)
+    {
+        static string[] Words(string t) => System.Text.RegularExpressions.Regex.Matches(t.ToLowerInvariant(), @"[\p{L}\p{N}']+")
+            .Select(m => m.Value.Trim('\'')).Where(w => w.Length > 0).ToArray();
+        var h = Words(heard);
+        if (h.Length is 0 or > 8) return false;
+        var s = Words(said).ToHashSet();
+        int found = h.Count(s.Contains);
+        return found >= Math.Max(1, (int)Math.Ceiling(h.Length * 0.7));
+    }
+
+    /// <summary>
+    /// "Thanks", "that's all", "bye": the person is done, so after the answer the puck doesn't
+    /// listen for more. <paramref name="lower"/> is lower case.
+    /// </summary>
+    internal static bool EndsConversation(string lower)
+    {
+        var t = lower.Trim().TrimEnd('.', '!', '?', ',').Replace('\u2019', '\'');
+        foreach (var lead in new[] { "ok, ", "okay, ", "ok ", "okay ", "great, ", "great ", "perfect, ", "perfect ", "cool, ", "cool ", "awesome, ", "awesome " })
+            if (t.StartsWith(lead, StringComparison.Ordinal)) t = t[lead.Length..].Trim();
+        foreach (var tail in new[] { " very much", " so much", " mate", " heaps", " a lot" })
+            if (t.EndsWith(tail, StringComparison.Ordinal)) t = t[..^tail.Length].Trim();
+        return t is "thanks" or "thank you" or "thankyou" or "cheers" or "ta" or "that's all" or "that's it" or "that is all"
+            or "that's everything" or "that'll do" or "bye" or "goodbye" or "good bye" or "bye bye" or "see you" or "good night"
+            or "goodnight" or "no thanks" or "no thank you" or "nothing else" or "all good" or "i'm done" or "we're done"
+            or "stop listening" or "go to sleep" or "ok" or "okay" or "great" or "perfect" or "cool" or "awesome";
+    }
+
+    async Task AnswerAsync(string transcript, bool lastWord, CancellationToken cancel)
     {
         var s = _settings.Current;
         var reply = new StringBuilder();
@@ -329,7 +541,10 @@ public sealed class VoiceSession
         _puck.Send(new JsonObject { ["t"] = "reply", ["text"] = Clip(result.Text, 700), ["done"] = true });
 
         await speaker.ConfigureAwait(false);
-        bool followUp = s.Assistant.FollowUpListening && EndsWithQuestion(result.Text);
+        // Carry on listening for a reply, unless they said that was all (or there's no voice: the
+        // answer is on the screen to read, which takes longer than a reply would wait)
+        bool followUp = s.Assistant.FollowUpListening && !lastWord && _speech.Tts is not null &&
+                        (!s.Assistant.FollowUpOnlyAfterQuestions || EndsWithQuestion(result.Text));
         FinishTurn(followUp);
     }
 
@@ -350,9 +565,15 @@ public sealed class VoiceSession
         else _puck.Send(new JsonObject { ["t"] = "ai", ["s"] = "idle" });
     }
 
-    async Task NothingHeardAsync(CancellationToken cancel)
+    async Task NothingHeardAsync(Heard heard, CancellationToken cancel)
     {
         _puck.Send(new JsonObject { ["t"] = "heard", ["text"] = "" });
+        // Carrying on after an answer and nothing (clear) was said: they've finished, quietly stop
+        if (heard.FollowUp)
+        {
+            FinishTurn(false);
+            return;
+        }
         await SpeakOnlyAsync("Sorry, I didn't catch that.", cancel, showText: true).ConfigureAwait(false);
         FinishTurn(false);
     }
@@ -438,8 +659,18 @@ public sealed class VoiceSession
     /// Turns sentences into speech and streams it to the puck, paced a little ahead of real time.
     /// Synthesis of the next sentence overlaps playback of the current one.
     /// </summary>
+    void NoteSpoken(string sentence)
+    {
+        lock (_gate)
+        {
+            if (_spoken.Length > 4000) _spoken.Remove(0, 2000);
+            _spoken.Append(' ').Append(sentence);
+        }
+    }
+
     async Task SpeakLoopAsync(ChannelReader<string> sentences, CancellationToken cancel)
     {
+        lock (_gate) _spoken.Clear();
         // A talking face (Openspline…) on a puck that can show it: the reply goes through the face
         if (_speech.Face is { } face && _puck.CanShowVideo)
         {
@@ -461,6 +692,7 @@ public sealed class VoiceSession
         {
             await foreach (var sentence in sentences.ReadAllAsync(cancel).ConfigureAwait(false))
             {
+                NoteSpoken(sentence);
                 IAsyncEnumerable<short[]> audio;
                 try { audio = _speech.SynthesizeAsync(sentence, cancel); }
                 catch (Exception e) when (e is not OperationCanceledException)
@@ -594,6 +826,7 @@ public sealed class VoiceSession
         {
             await foreach (var sentence in sentences.ReadAllAsync(cancel).ConfigureAwait(false))
             {
+                NoteSpoken(sentence);
                 IAsyncEnumerable<short[]> audio;
                 try { audio = _speech.SynthesizeAsync(sentence, cancel); }
                 catch (Exception e) when (e is not OperationCanceledException)

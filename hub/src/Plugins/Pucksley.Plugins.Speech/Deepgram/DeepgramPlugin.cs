@@ -28,7 +28,7 @@ public sealed class DeepgramSettings
 }
 
 /// <summary>Deepgram Nova-3 transcription over REST: fast and accurate on short commands, New Zealand English included.</summary>
-public sealed class DeepgramPlugin : SpeechPlugin<DeepgramSettings>, ISpeechToText, IDirectSpeechToText
+public sealed class DeepgramPlugin : SpeechPlugin<DeepgramSettings>, IStreamingSpeechToText, IDirectSpeechToText
 {
     public const string DefaultModel = "nova-3";
     internal const string ApiBase = "https://api.deepgram.com";
@@ -61,6 +61,31 @@ public sealed class DeepgramPlugin : SpeechPlugin<DeepgramSettings>, ISpeechToTe
 
         using var response = await SendAsync(request, Service, HttpCompletionOption.ResponseContentRead, cancel).ConfigureAwait(false);
         return ReadTranscript(await SpeechHttp.ReadJsonAsync(response, Service, cancel).ConfigureAwait(false));
+    }
+
+    // ---- live: words while the person is still talking, and Deepgram telling when they've finished
+
+    public async Task<ISpeechStream?> StartStreamAsync(SpeechStreamOptions options, CancellationToken cancel)
+    {
+        var s = Settings;
+        if (NullIfBlank(s.ApiKey) is not { } key) return null;
+        return await DeepgramStream.OpenAsync(LiveUrl(s, options), key, Log, cancel).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The streaming address: the same options as <see cref="ListenUrl"/>, plus raw 16 kHz audio,
+    /// interim words, and the pause that ends what was said ("endpointing" after speech; an
+    /// "utterance end" from the words' timing a little later, which noise can't hold off).
+    /// </summary>
+    internal static Uri LiveUrl(DeepgramSettings s, SpeechStreamOptions o)
+    {
+        var rest = ListenUrl(s, o.Language);
+        // Live recognition can't detect the language; Nova-3 listens for several at once instead
+        var query = rest.Query.TrimStart('?').Replace("detect_language=true", "language=multi");
+        int pause = Math.Clamp(o.EndSilenceMs, 300, 3000);
+        query += $"&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&vad_events=true" +
+                 $"&endpointing={pause}&utterance_end_ms={Math.Clamp(pause + 300, 1000, 5000)}";
+        return new UriBuilder(rest) { Scheme = "wss", Port = -1, Query = query }.Uri;
     }
 
     // ---- direct mode: the same request, made by the puck itself when the hub is away

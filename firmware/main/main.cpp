@@ -20,6 +20,12 @@ void uiTask(void*) {
   uint32_t lastRender = 0;
   for (;;) {
     hub::poll();
+    // Someone talked over the puck: stop speaking and listen, from the words that set it off
+    if (hal::bargeTaken()) {
+      if (face_video::screenTaken()) face_video::stop();
+      hub::talk("start", "voice");
+      hal::micStartWithPreroll();
+    }
     if (face_video::screenTaken()) {
       // The talking face has the panel: no rendering, but a tap or the button still stops the reply
       InputEvent e;

@@ -176,7 +176,16 @@ void refreshText() {
     case View::Idle:
       break;
     case View::Listening:
-      setText(status, "Listening\xE2\x80\xA6");
+      // The words as they're recognised (live), or just "Listening..."
+      if (g_model.heard[0]) {
+        snprintf(quoted, sizeof quoted, "\"%s\"", tailOf(g_model.heard, 90));
+        lv_obj_set_style_text_font(status, &nunito_22, 0);
+        setText(status, quoted);
+      } else {
+        lv_obj_set_style_text_font(status, &nunito_28, 0);
+        setText(status, "Listening\xE2\x80\xA6");
+      }
+      at(status, CX, 318);
       break;
     case View::Thinking:
       if (g_model.heard[0]) {

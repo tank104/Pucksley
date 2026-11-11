@@ -37,6 +37,7 @@ public sealed class HubFixture : IAsyncLifetime
     public SettingsStore Settings => App.Services.GetRequiredService<SettingsStore>();
     public HubEvents Events => App.Services.GetRequiredService<HubEvents>();
     public FakeSpeechPlugin Speech => (FakeSpeechPlugin)Plugins.Find("fake-speech")!.Plugin;
+    public FakeLiveSpeechPlugin LiveSpeech => (FakeLiveSpeechPlugin)Plugins.Find("fake-live-speech")!.Plugin;
     public HubToolsPlugin Tools => (HubToolsPlugin)Plugins.Find("hub-tools")!.Plugin;
 
     public async Task InitializeAsync()
@@ -51,6 +52,7 @@ public sealed class HubFixture : IAsyncLifetime
         {
             s.HubName = "TEST-HUB";
             s.Plugins["fake-speech"] = new PluginState { Enabled = true };
+            s.Plugins["fake-live-speech"] = new PluginState { Enabled = true };
             s.Plugins["hub-tools"] = new PluginState { Enabled = true };
         });
 
@@ -80,10 +82,15 @@ public sealed class HubFixture : IAsyncLifetime
     {
         Claude.Reset();
         Speech.Reset();
+        LiveSpeech.Reset();
         Tools.Reset();
         Settings.Update(s =>
         {
             s.Assistant.FollowUpListening = true;
+            s.Assistant.FollowUpOnlyAfterQuestions = false;
+            s.Assistant.FollowUpSeconds = 6;
+            s.Voice.LiveRecognition = true;
+            s.Voice.NoSpeechTimeoutSeconds = 7;
             s.Voice.AutoEndOfSpeech = true;
             s.Voice.SttEngine = "fake-stt";
             s.Voice.TtsEngine = "fake-tts";

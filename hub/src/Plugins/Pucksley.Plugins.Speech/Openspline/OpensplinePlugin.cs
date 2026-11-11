@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using Pucksley.Sdk;
 
@@ -24,9 +26,9 @@ public sealed class OpensplineSettings
         Help = "Runs Openspline when it isn't answering, and stops it again when the hub stops (so the GPU is only busy while Pucksley runs). Empty: start it yourself.")]
     public string StartCommand { get; set; } = "";
 
-    [Setting("Quality", Order = 4, Options = ["low", "high"], Advanced = true,
-        Help = "Low keeps up live on one mid-range GPU (about 25 frames a second); high needs a much bigger one.")]
-    public string Quality { get; set; } = "low";
+    [Setting("Stop command", Order = 6, Advanced = true, Placeholder = "wsl.exe -d Ubuntu-24.04 -- pkill -f openspline_server",
+        Help = "Stops Openspline however it was started (say, by the hub before it restarted), so one that gets stuck can be restarted by itself or with the Restart button. Empty: only an Openspline the hub started can be restarted.")]
+    public string StopCommand { get; set; } = "";
 }
 
 /// <summary>
@@ -100,31 +102,31 @@ public sealed class OpensplinePlugin : PuckPlugin<OpensplineSettings>, ITalkingF
                     await ConnectAsync(cancel).ConfigureAwait(false);
                     wait = TimeSpan.FromSeconds(5);
                     _busySince = null;
-                    SetStatus(StatusLevel.Ok, $"Ready: avatar {_session!.Id[..8]} ({Settings.Quality} quality)");
+                    SetStatus(StatusLevel.Ok, $"Ready: avatar {_session!.Id[..8]}");
                 }
                 catch (OpensplineBusyException e)
                 {
                     if (cancel.IsCancellationRequested) break;
-                    // No free worker: another session has it, or it crashed and is stuck. One this
-                    // plugin started gets restarted if that lasts; another is left for the person.
+                    // No free worker: another session has it (one left behind ends by itself
+                    // within two minutes), or it's stuck. If that lasts, restart it: it comes back
+                    // free in half a minute.
                     _busySince ??= DateTime.UtcNow;
                     var busyFor = DateTime.UtcNow - _busySince.Value;
-                    if (busyFor > TimeSpan.FromSeconds(90) && _service is { HasExited: false })
+                    if (busyFor > TimeSpan.FromSeconds(90) && CanRestart)
                     {
                         Log.LogWarning("Openspline has had no free worker for {Seconds} s: restarting it", (int)busyFor.TotalSeconds);
-                        StopService();
-                        _busySince = null;
-                        wait = TimeSpan.FromSeconds(2);
+                        await RestartServiceAsync(cancel).ConfigureAwait(false);
+                        wait = TimeSpan.Zero;
                     }
                     else
                     {
-                        SetStatus(StatusLevel.Warning, _service is null && busyFor > TimeSpan.FromSeconds(90)
-                            ? $"Openspline has no free worker (another session has it, or it's stuck): restart Openspline. ({e.Message})"
+                        SetStatus(StatusLevel.Warning, busyFor > TimeSpan.FromSeconds(90)
+                            ? $"Openspline has no free worker (another session has it, or it's stuck): restart Openspline, or set a stop command so the hub can. ({e.Message})"
                             : "Waiting for Openspline to free its worker…");
                         wait = TimeSpan.FromSeconds(10);
                     }
                 }
-                catch (Exception e) when (e is PluginException or HttpRequestException or System.Net.WebSockets.WebSocketException or OperationCanceledException or IOException or UriFormatException)
+                catch (Exception e) when (e is PluginException or HttpRequestException or System.Net.WebSockets.WebSocketException or OperationCanceledException or IOException or UriFormatException or System.Text.Json.JsonException)
                 {
                     if (cancel.IsCancellationRequested) break;
                     bool notAnswering = e is HttpRequestException or System.Net.WebSockets.WebSocketException;
@@ -200,6 +202,75 @@ public sealed class OpensplinePlugin : PuckPlugin<OpensplineSettings>, ITalkingF
         return false;
     }
 
+    /// <summary>Whether this plugin can stop Openspline (it started it, or there's a stop command) and start it again.</summary>
+    bool CanRestart =>
+        !string.IsNullOrWhiteSpace(Settings.StartCommand) &&
+        (_service is { HasExited: false } || !string.IsNullOrWhiteSpace(Settings.StopCommand));
+
+    /// <summary>
+    /// Stops Openspline (the copy this plugin started, or with the stop command) and waits until it
+    /// has gone; the keeper then starts it again, fresh, with its worker free.
+    /// </summary>
+    async Task RestartServiceAsync(CancellationToken cancel)
+    {
+        _busySince = null;
+        await CloseAsync().ConfigureAwait(false);
+        SetStatus(StatusLevel.Idle, "Restarting Openspline…");
+        StopService();
+        var stop = Settings.StopCommand?.Trim() ?? "";
+        if (stop.Length > 0)
+        {
+            try
+            {
+                var info = OperatingSystem.IsWindows() ? new ProcessStartInfo("cmd.exe", $"/s /c \"{stop}\"") : new ProcessStartInfo("/bin/sh", ["-c", stop]);
+                info.UseShellExecute = false;
+                info.CreateNoWindow = true;
+                using var p = Process.Start(info);
+                if (p is not null)
+                {
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                    cts.CancelAfter(TimeSpan.FromSeconds(20));
+                    try { await p.WaitForExitAsync(cts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { }
+                }
+                Log.LogInformation("Openspline: ran the stop command ({Command})", stop);
+            }
+            catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+            {
+                Log.LogWarning("Openspline: couldn't run the stop command: {Message}", e.Message);
+            }
+        }
+        // Gone once it stops answering (or 20 s)
+        var ready = new Uri(new Uri(Settings.Url.Trim().TrimEnd('/') + "/"), "readyz");
+        for (int i = 0; i < 20 && !cancel.IsCancellationRequested; i++)
+        {
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                cts.CancelAfter(TimeSpan.FromSeconds(2));
+                using var _ = await Context.Http.GetAsync(ready, cts.Token).ConfigureAwait(false);
+            }
+            catch (Exception e) when (e is HttpRequestException or OperationCanceledException) { break; }
+            try { await Task.Delay(1000, cancel).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    public override IReadOnlyList<PluginAction> GetActions() =>
+        [new("restart", "Restart Openspline", "Stops Openspline and starts it again (about half a minute): for when the face is stuck waiting for its worker.")];
+
+    public override async Task<ActionResult> RunActionAsync(string actionId, IReadOnlyDictionary<string, string> input, CancellationToken cancel)
+    {
+        if (actionId != "restart") return new ActionResult("Unknown action", false);
+        if (!CanRestart)
+            return new ActionResult(string.IsNullOrWhiteSpace(Settings.StartCommand)
+                ? "Set a start command first, so the hub can start Openspline again."
+                : "Openspline wasn't started by the hub: set a stop command (Advanced) so the hub can stop it.", false);
+        // The keeper starts it again once it has gone
+        await RestartServiceAsync(cancel).ConfigureAwait(false);
+        return new ActionResult("Restarting Openspline: the face is back in about half a minute.");
+    }
+
     /// <summary>Stops the copy of Openspline this plugin started (one started some other way is left alone).</summary>
     void StopService()
     {
@@ -224,15 +295,68 @@ public sealed class OpensplinePlugin : PuckPlugin<OpensplineSettings>, ITalkingF
             _session = null;
             var portrait = await PortraitAsync(cancel).ConfigureAwait(false);
             var url = new Uri(Settings.Url.Trim().TrimEnd('/') + "/");
+            await EndLeftoverSessionAsync(url).ConfigureAwait(false);
+            await EnsureQualityAsync(url, Quality, cancel).ConfigureAwait(false);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
             cts.CancelAfter(TimeSpan.FromSeconds(90)); // the first one loads the models
-            _session = await OpensplineSession.OpenAsync(url, Context.Http, portrait, Settings.Quality is "high" ? "high" : "low", Log, cts.Token).ConfigureAwait(false);
+            _session = await OpensplineSession.OpenAsync(url, Context.Http, portrait, Quality, Log, cts.Token).ConfigureAwait(false);
             Log.LogInformation("Openspline: avatar session {Id} ready", _session.Id);
+            RememberSession(url, _session);
         }
         finally
         {
             _connect.Release();
         }
+    }
+
+    /// <summary>Always low quality: high can't keep up live on one GPU and unsettles Openspline.</summary>
+    const string Quality = "low";
+
+    /// <summary>
+    /// Openspline's worker loads one quality at a time: if it was left on the other one (its own
+    /// demo page can do that), ask it to switch (its models load again, which takes a while) and
+    /// wait until it has.
+    /// </summary>
+    async Task EnsureQualityAsync(Uri url, string quality, CancellationToken cancel)
+    {
+        JsonNode? ready;
+        using (var response = await Context.Http.GetAsync(new Uri(url, "readyz"), cancel).ConfigureAwait(false))
+            ready = JsonNode.Parse(await response.Content.ReadAsStringAsync(cancel).ConfigureAwait(false));
+        var workers = ready?["workers"] as JsonArray;
+        if (workers is null || workers.Any(w => w?["quality"]?.GetValue<string>() == quality)) return;
+        var switchable = (ready?["demo_qualities"] as JsonArray)?.Any(q => q?.GetValue<string>() == quality) ?? false;
+        if (!switchable || workers.Count != 1)
+            throw new PluginException($"Openspline has no {quality}-quality worker: add one to its workers.yaml, or choose the other quality");
+
+        SetStatus(StatusLevel.Idle, $"Switching Openspline to {quality} quality (loading its models)…");
+        Log.LogInformation("Openspline: switching its worker to {Quality} quality", quality);
+        string text;
+        using (var response = await Context.Http.PostAsJsonAsync(new Uri(url, "v1/demo/quality"), new { quality }, cancel).ConfigureAwait(false))
+        {
+            text = await response.Content.ReadAsStringAsync(cancel).ConfigureAwait(false);
+            if ((int)response.StatusCode == 429) throw new OpensplineBusyException(text);
+            if (!response.IsSuccessStatusCode)
+                throw new PluginException($"Openspline couldn't switch to {quality} quality ({(int)response.StatusCode}): {text}");
+        }
+        var id = JsonNode.Parse(text)?["id"]?.GetValue<string>();
+        if (id is null) return;   // it already had it
+        var deadline = DateTime.UtcNow.AddMinutes(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(2000, cancel).ConfigureAwait(false);
+            JsonNode? job;
+            using (var response = await Context.Http.GetAsync(new Uri(url, $"v1/demo/quality/{id}"), cancel).ConfigureAwait(false))
+                job = JsonNode.Parse(await response.Content.ReadAsStringAsync(cancel).ConfigureAwait(false));
+            switch (job?["state"]?.GetValue<string>())
+            {
+                case "ready":
+                    Log.LogInformation("Openspline: now at {Quality} quality", quality);
+                    return;
+                case "error":
+                    throw new PluginException($"Openspline couldn't switch to {quality} quality: {job?["error"]?.GetValue<string>()}");
+            }
+        }
+        throw new PluginException($"Openspline took too long switching to {quality} quality");
     }
 
     /// <summary>The picture to animate: the person's own file when set, otherwise the chosen face.</summary>
@@ -278,11 +402,46 @@ public sealed class OpensplinePlugin : PuckPlugin<OpensplineSettings>, ITalkingF
         {
             if (_session is not null) await _session.DisposeAsync().ConfigureAwait(false);
             _session = null;
+            ForgetSession();
         }
         finally
         {
             _connect.Release();
         }
+    }
+
+    // The open session is written down, so if the hub dies without ending it (killed, crashed),
+    // the next start ends it: otherwise it holds Openspline's only worker until it times out.
+    string SessionFile => Path.Combine(Context.DataDirectory, "session.json");
+
+    void RememberSession(Uri url, OpensplineSession session)
+    {
+        try
+        {
+            File.WriteAllText(SessionFile, new JsonObject { ["url"] = url.ToString(), ["id"] = session.Id, ["token"] = session.PublisherToken }.ToJsonString());
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    void ForgetSession()
+    {
+        try { File.Delete(SessionFile); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    async Task EndLeftoverSessionAsync(Uri url)
+    {
+        JsonNode? left;
+        try { left = File.Exists(SessionFile) ? JsonNode.Parse(await File.ReadAllTextAsync(SessionFile).ConfigureAwait(false)) : null; }
+        catch (Exception e) when (e is IOException or System.Text.Json.JsonException) { left = null; }
+        ForgetSession();
+        if (left?["id"]?.GetValue<string>() is not { Length: > 0 } id || left["token"]?.GetValue<string>() is not { Length: > 0 } token) return;
+        // Only on the service it was opened on
+        if (!string.Equals(left["url"]?.GetValue<string>(), url.ToString(), StringComparison.OrdinalIgnoreCase)) return;
+        Log.LogInformation("Openspline: ending session {Id} left over from before", id[..Math.Min(8, id.Length)]);
+        await OpensplineSession.EndAsync(url, Context.Http, id, token).ConfigureAwait(false);
     }
 
     public Task<ITalkingFaceTurn> BeginTurnAsync(CancellationToken cancel)

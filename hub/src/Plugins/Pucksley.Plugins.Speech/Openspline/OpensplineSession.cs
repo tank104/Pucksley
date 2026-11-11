@@ -17,7 +17,7 @@ namespace Pucksley.Plugins.Speech.Openspline;
 /// <item><c>POST /v1/sessions</c> with the portrait → id, a publisher token, and a viewer link holding the viewer token.</item>
 /// <item><c>WS /v1/sessions/{id}/audio</c> (publisher): requests <c>{"type":"audio"|"end_turn"|"ping","id":…}</c>, each answered by an event with the same id.</item>
 /// <item><c>WS /v1/sessions/{id}/playback</c> (viewer): <c>connected</c>, then <c>idle</c> and <c>media</c> events (a base64 JPEG and
-/// 48 kHz s16le audio each) that must be acknowledged (<c>idle_played</c>, <c>played</c>), <c>turn_end</c>, <c>interrupted</c>.
+/// 48 kHz s16le audio each); media is acknowledged (<c>played</c>), idle isn't (see the playback loop), <c>turn_end</c>, <c>interrupted</c>.
 /// The service keeps at most about a second of audio unacknowledged, so acknowledging as the hub forwards paces it.</item>
 /// </list>
 /// </summary>
@@ -37,6 +37,9 @@ public sealed class OpensplineSession : IAsyncDisposable
 
     public string Id { get; private set; } = "";
     string _publisherToken = "", _viewerToken = "";
+
+    /// <summary>The token that ends this session (kept by the plugin so a hub that died can end it next time).</summary>
+    public string PublisherToken => _publisherToken;
 
     /// <summary>Both sockets are up and the service has our viewer.</summary>
     public bool IsOpen => !Failed && _viewerReady.Task.IsCompletedSuccessfully;
@@ -289,12 +292,11 @@ public sealed class OpensplineSession : IAsyncDisposable
                             _viewerReady.TrySetResult();
                             break;
                         case "idle":
-                            // Idle motion between replies: the puck keeps its own face, just acknowledge it
-                            await PlaybackSendAsync(new JsonObject
-                            {
-                                ["type"] = "idle_played", ["epoch"] = epoch,
-                                ["sequence"] = e.TryGetProperty("sequence", out var seq) ? JsonNode.Parse(seq.GetRawText()) : null,
-                            }, cancel).ConfigureAwait(false);
+                            // Idle motion between replies: the puck keeps its own face, so these are
+                            // left unacknowledged on purpose. Openspline sends 25 at most without an
+                            // answer, then stops, and stops generating more: acknowledged, it would
+                            // animate an unseen face nonstop and keep the GPU at 100%. (The pings keep
+                            // the session alive.)
                             break;
                         case "media":
                         {
@@ -378,6 +380,19 @@ public sealed class OpensplineSession : IAsyncDisposable
     static string? Str(JsonElement e, string name) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
+    /// <summary>Ends a session on the service (frees its worker); quietly does nothing if it's gone.</summary>
+    public static async Task EndAsync(Uri baseUrl, HttpClient http, string id, string publisherToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Delete, new Uri(baseUrl, $"v1/sessions/{Uri.EscapeDataString(id)}"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", publisherToken);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            using var _ = await http.SendAsync(request, cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is HttpRequestException or OperationCanceledException) { }
+    }
+
     static string Shorten(string s) => s.Length <= 200 ? s : s[..199] + "…";
 
     public async ValueTask DisposeAsync()
@@ -397,17 +412,7 @@ public sealed class OpensplineSession : IAsyncDisposable
             catch (Exception e) when (e is WebSocketException or OperationCanceledException or ObjectDisposedException) { }
             ws.Dispose();
         }
-        if (!string.IsNullOrEmpty(Id))
-        {
-            try
-            {
-                using var request = new HttpRequestMessage(HttpMethod.Delete, new Uri(_base, $"v1/sessions/{Id}"));
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _publisherToken);
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                using var _ = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
-            }
-            catch (Exception e) when (e is HttpRequestException or OperationCanceledException) { }
-        }
+        if (!string.IsNullOrEmpty(Id)) await EndAsync(_base, _http, Id, _publisherToken).ConfigureAwait(false);
         foreach (var t in new[] { _audioLoop, _playbackLoop, _heartbeat })
             if (t is not null) try { await t.ConfigureAwait(false); } catch { }
         _stop.Dispose();

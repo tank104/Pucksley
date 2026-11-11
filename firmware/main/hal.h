@@ -50,6 +50,12 @@ void setSoundEnabled(bool on);
 // ---- voice audio: 16 kHz mono 16-bit, mics (ES7210) in and speech out, full duplex on one I2S.
 // The mic side has a single reader and the speaker side a single writer (the link's task).
 void micStart();                                   // start filling the mic buffer
+// Talking over the puck: while it speaks, listen for the person starting to talk (louder than the
+// speaker's own echo), so they can interrupt by voice. bargeTaken() is true once when they did;
+// micStartWithPreroll() then starts the mic with the half second before it noticed.
+void bargeArm(bool on);
+bool bargeTaken();
+void micStartWithPreroll();
 void micStop();
 bool micActive();
 size_t micRead(int16_t* dst, size_t maxSamples);   // non-blocking: what's waiting (0 if none)

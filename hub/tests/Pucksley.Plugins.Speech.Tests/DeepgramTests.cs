@@ -46,6 +46,21 @@ public class DeepgramTests
         Assert.Equal(50, DeepgramPlugin.CleanKeyTerms(Enumerable.Range(0, 80).Select(i => $"name {i}")).Count);
     }
 
+    [Fact]
+    public void Live_recognition_streams_raw_audio_with_interim_words_and_the_pause_that_ends_it()
+    {
+        var settings = new DeepgramSettings { ApiKey = "k", KeyTerms = ["Mitchell"] };
+        var url = DeepgramPlugin.LiveUrl(settings, new SpeechStreamOptions("en-NZ", 800)).AbsoluteUri;
+        Assert.StartsWith("wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&language=en-NZ&mip_opt_out=true&keyterm=Mitchell", url);
+        Assert.EndsWith("&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&vad_events=true&endpointing=800&utterance_end_ms=1100", url);
+
+        // It can't detect the language live: Nova-3 listens for several instead
+        var auto = DeepgramPlugin.LiveUrl(settings, new SpeechStreamOptions(null, 100)).AbsoluteUri;
+        Assert.Contains("language=multi", auto);
+        Assert.DoesNotContain("detect_language", auto);
+        Assert.Contains("endpointing=300&utterance_end_ms=1000", auto);   // within what Deepgram accepts
+    }
+
     [Theory]
     [InlineData("en-NZ", "en-NZ")]
     [InlineData("en_nz", "en-NZ")]

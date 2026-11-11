@@ -36,7 +36,7 @@ public sealed class HubVoiceTests(HubFixture hub) : HubTestBase(hub)
     }
 
     [Fact]
-    public async Task A_whole_turn_with_a_tool_ends_idle()
+    public async Task A_whole_turn_with_a_tool_then_listens_for_a_reply()
     {
         Hub.Claude
             .Then(Reply("tool_use", [TextBlock("One moment."), ToolUse("toolu_k1", "hub_tools_lights", """{"room":"Kitchen","level":30}""")], delayMs: 5))
@@ -79,9 +79,9 @@ public sealed class HubVoiceTests(HubFixture hub) : HubTestBase(hub)
         Assert.All(replies.Where(r => !r["done"]!.GetValue<bool>()), r => Assert.StartsWith(S(r, "text")!, answer));
         Assert.Equal(answer, string.Join(" ", Hub.Speech.Spoken));
 
-        // The puck finished playing: back to idle (no question asked, so no follow-up)
+        // The puck finished playing: it listens for a reply (the conversation carries on)
         await puck.SpeakerDoneAsync(id);
-        await puck.WaitForAsync("ai", m => IsAi(m, "idle"), TimeSpan.FromSeconds(2));
+        await puck.WaitForAsync("listen", timeout: TimeSpan.FromSeconds(2));
 
         // Behind the scenes: the STT got the 16 kHz clip, the tool ran for this puck, and Claude got the result
         var clip = Assert.Single(Hub.Speech.Heard);
@@ -193,7 +193,7 @@ public sealed class HubVoiceTests(HubFixture hub) : HubTestBase(hub)
         Assert.Contains(rest, f => Is(f, "act", "s", "ok"));
         Assert.Equal([$"shutdown {puck.Id}"], Hub.Tools.Calls);
         await puck.SpeakerDoneAsync(rest.Last().Json!["id"]!.GetValue<int>());
-        await puck.WaitForAsync("ai", m => IsAi(m, "idle"));
+        await puck.WaitForAsync("listen");
 
         // No
         await puck.TalkAsync("start");

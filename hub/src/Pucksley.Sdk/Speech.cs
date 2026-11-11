@@ -18,6 +18,43 @@ public interface ISpeechToText
     Task<string> TranscribeAsync(AudioClip audio, string? language, CancellationToken cancel);
 }
 
+/// <summary>
+/// A speech-to-text engine that can listen live: audio goes in while the person talks and the words
+/// come back as they're recognised, along with when the person has finished (judged from the words
+/// and the pauses between them, so background noise doesn't keep the puck listening). The hub uses
+/// it, when it's the chosen engine, instead of recording and then calling <see cref="ISpeechToText.TranscribeAsync"/>.
+/// </summary>
+public interface IStreamingSpeechToText : ISpeechToText
+{
+    /// <summary>Opens a live recognition, or null if it can't right now (the hub then records and transcribes as usual).</summary>
+    Task<ISpeechStream?> StartStreamAsync(SpeechStreamOptions options, CancellationToken cancel);
+}
+
+/// <summary>For a live recognition: the language (BCP-47, null for automatic) and how long a pause after words ends what was said.</summary>
+public sealed record SpeechStreamOptions(string? Language, int EndSilenceMs);
+
+/// <summary>One live recognition (one thing the person says). Audio is 16 kHz mono 16-bit.</summary>
+public interface ISpeechStream : IAsyncDisposable
+{
+    /// <summary>More audio, as it's heard (never blocks; it's sent in the background).</summary>
+    void Send(ReadOnlySpan<short> samples);
+
+    /// <summary>What's been recognised so far: the finished pieces and the current guess.</summary>
+    string Text { get; }
+
+    /// <summary>The person has finished: words, then a pause.</summary>
+    bool Ended { get; }
+
+    /// <summary>It stopped working (the connection dropped…); the hub falls back to the recording.</summary>
+    bool Failed { get; }
+
+    /// <summary>Raised (on any thread) when <see cref="Text"/>, <see cref="Ended"/> or <see cref="Failed"/> changes.</summary>
+    event Action? Changed;
+
+    /// <summary>No more audio: the final transcript of everything sent ("" if nothing was said).</summary>
+    Task<string> FinishAsync(CancellationToken cancel);
+}
+
 /// <summary>A text-to-speech engine, offered by a plugin.</summary>
 public interface ITextToSpeech
 {

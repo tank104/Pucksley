@@ -15,14 +15,17 @@ namespace {
 
 constexpr int kTapSlopPx = 14;            // more than this and it's a drag, not a tap
 constexpr uint32_t kTapMaxMs = 450;          // up to long-press territory: a slow, deliberate tap still counts
-constexpr uint32_t kDoubleTapMs = 300;    // between the first release and the second tap
+constexpr uint32_t kDoubleTapMs = 450;    // from the first tap's lift (its last fresh report) to the second tap
 constexpr int kDoubleTapSlopPx = 40;
 constexpr uint32_t kLongPressMs = 600;
 constexpr uint32_t kSwipeMaxMs = 400;
 constexpr int kSwipeMinPx = 60;
 constexpr uint32_t kMoveEventMs = 16;     // TouchMove events to the faces at most ~60 Hz
 constexpr float kTwoFingerScrollPx = 30;  // trackpad: two-finger drag, px per scroll notch
-constexpr uint32_t kQuietReleaseMs = 1200;  // a finger down but no fresh report for this long: take it as lifted
+// The CST9217 never says a finger lifted: while one rests on the glass it sends a fresh report
+// every so often (up to ~300 ms apart when it's still), and in between only "nothing new" (no ack,
+// or a stale report starting 0xAB). So a finger is lifted once fresh reports stop for this long.
+constexpr uint32_t kLiftMs = 250;
 
 TouchDrvCST92xx s_touch;
 bool s_ok = false;
@@ -45,8 +48,44 @@ struct Gesture {
 
 uint32_t s_lastTapUpMs = 0;
 uint8_t s_emptyReads = 0;  // a lone empty report mid-drag is a glitch, not a release
-uint32_t s_lastReportMs = 0;  // the chip's last fresh report (points or not) while a finger was down
+uint32_t s_lastPointMs = 0;   // the chip's last fresh report of a finger
 int16_t s_lastTapX = 0, s_lastTapY = 0;
+
+// What the chip reported, read by read, from a press until 1.5 s after it ended: logged to the
+// hub, to learn how this controller reports a finger held still versus one that lifted.
+// P = touching (state 6), . = no fresh report, b = bus error, z = no fingers, 0-F = another state.
+char s_trace[400];
+uint32_t s_traceMark = 0;
+size_t s_traceLen = 0;
+uint32_t s_traceFrom = 0, s_traceUntil = 0, s_traceUpAt = 0;
+bool s_tracing = false;
+uint8_t s_traceOther[7] = {};
+bool s_traceHasOther = false;
+
+void traceRead(char c) {
+  if (s_tracing && s_traceLen + 1 < sizeof s_trace) s_trace[s_traceLen++] = c;
+}
+
+void traceStart(uint32_t now) {
+  if (s_tracing) return;  // pressed again within the tail of the last one: carry on
+  s_tracing = true;
+  s_traceLen = 0;
+  s_traceFrom = now;
+  s_traceMark = now;
+  s_traceUntil = 0;
+  s_traceUpAt = 0;
+  s_traceHasOther = false;
+}
+
+void traceFlush(uint32_t now) {
+  if (!s_tracing || !s_traceUntil || (int32_t)(now - s_traceUntil) < 0) return;
+  s_tracing = false;
+  s_trace[s_traceLen] = 0;
+  hal::logLine("[touch] up after %lums: %s", (unsigned long)(s_traceUpAt - s_traceFrom), s_trace);
+  if (s_traceHasOther)
+    hal::logLine("[touch] first other report: %02X %02X %02X %02X %02X %02X %02X", s_traceOther[0], s_traceOther[1], s_traceOther[2],
+                 s_traceOther[3], s_traceOther[4], s_traceOther[5], s_traceOther[6]);
+}
 
 inline int16_t clampCoord(int v, int max) { return (int16_t)(v < 0 ? 0 : (v > max - 1 ? max - 1 : v)); }
 inline int dist2(int dx, int dy) { return dx * dx + dy * dy; }
@@ -63,6 +102,7 @@ void sendTrackpadMove(float dx, float dy) {
 }
 
 void onPress(int16_t x, int16_t y, uint8_t fingers, uint32_t now) {
+  traceStart(now);
   g = Gesture();
   g.down = true;
   g.x0 = g.x = x;
@@ -121,6 +161,10 @@ void onHold(int16_t x, int16_t y, uint8_t fingers, uint32_t now) {
 }
 
 void onRelease(uint32_t now) {
+  if (s_tracing) {
+    s_traceUpAt = now;
+    s_traceUntil = now + 1500;
+  }
   const Gesture done = g;
   g.down = false;
   if (done.swallowed) return;
@@ -131,7 +175,8 @@ void onRelease(uint32_t now) {
     hostlink::sendButton('l', false);
     return;
   }
-  const int32_t dur = (int32_t)(now - done.t0);
+  // How long the finger was really down: to its last fresh report (the lift is noticed later)
+  const int32_t dur = (int32_t)(s_lastPointMs - done.t0);
   const int dx = done.x - done.x0, dy = done.y - done.y0;
   if (!done.moved && !done.longFired && dur < (int32_t)kTapMaxMs) {
     post(Ev::Tap, 0, done.x, done.y);
@@ -140,7 +185,7 @@ void onRelease(uint32_t now) {
       post(Ev::DoubleTap, 0, done.x, done.y);
       s_lastTapUpMs = 0;  // a third tap starts over
     } else {
-      s_lastTapUpMs = now;
+      s_lastTapUpMs = s_lastPointMs;  // when it really lifted
       s_lastTapX = done.x;
       s_lastTapY = done.y;
     }
@@ -246,6 +291,24 @@ void touchPoll(uint32_t now) {
   }
   s_touchReads++;
   if (kind < 5) s_readKinds[kind]++;
+  if (s_tracing) {
+    const uint8_t st = s_touch.lastState;
+    if (now - s_traceMark >= 100) {
+      s_traceMark += 100;
+      traceRead('|');
+    }
+    traceRead(kind == TouchDrvCST92xx::ReadPoints     ? 'P'
+              : kind == TouchDrvCST92xx::ReadNoAck    ? '.'
+              : kind == TouchDrvCST92xx::ReadBusError ? 'b'
+              : kind == TouchDrvCST92xx::ReadNoPoints ? 'z'
+              : s_touch.lastReport[0] == 0xAB         ? 's'   // the stale "nothing new" report
+                                                       : "0123456789ABCDEF"[st & 0x0F]);
+    if (kind == TouchDrvCST92xx::ReadRelease && s_touch.lastReport[0] != 0xAB && !s_traceHasOther) {
+      s_traceHasOther = true;
+      memcpy(s_traceOther, s_touch.lastReport, sizeof s_traceOther);
+    }
+    traceFlush(now);
+  }
   auto release = [&] {
     s_emptyReads = 0;
     onRelease(now);
@@ -255,7 +318,7 @@ void touchPoll(uint32_t now) {
   if (n > 0) {
     if (s_touchPoints++ == 0) hal::logLine("[hal] touch: first touch at %d,%d", xs[0], ys[0]);
     s_emptyReads = 0;
-    s_lastReportMs = now;
+    s_lastPointMs = now;
     if (!s_fingerDown.exchange(true)) s_fingerDownMs = now;
     const int16_t x = clampCoord(xs[0], LCD_W), y = clampCoord(ys[0], LCD_H);
     if (!g.down) onPress(x, y, n, now);
@@ -263,22 +326,10 @@ void touchPoll(uint32_t now) {
     return;
   }
   if (!g.down) return;
-  switch (kind) {
-    case TouchDrvCST92xx::ReadRelease:
-      // The chip says the finger came up (it says so once)
-      release();
-      break;
-    case TouchDrvCST92xx::ReadNoPoints:
-      s_lastReportMs = now;
-      if (++s_emptyReads >= 2) release();
-      break;
-    default:
-      // No fresh report (the chip only has one when something changed) or a bus hiccup: that's
-      // not a lift. A finger resting still is still down, and still makes a long press.
-      if (now - s_lastReportMs >= kQuietReleaseMs) release();
-      else if (!g.moved && !g.longFired && !g.swallowed) onHold(g.x, g.y, g.maxFingers, now);
-      break;
-  }
+  // Nothing fresh: still down until fresh reports have stopped for a while. Meanwhile a finger
+  // resting still keeps its gesture going (a long press fires on time).
+  if (now - s_lastPointMs >= kLiftMs) release();
+  else if (!g.moved && !g.longFired && !g.swallowed) onHold(g.x, g.y, g.maxFingers, now);
 }
 
 }  // namespace detail

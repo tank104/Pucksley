@@ -254,6 +254,92 @@ public sealed class HubToolsPlugin : PuckPlugin<NoSettings>, IMediaSourceProvide
     }
 }
 
+/// <summary>
+/// A live speech engine (like Deepgram's streaming API): <see cref="Hear"/> decides what it has
+/// recognised, and whether the person has finished, from how much audio it has been sent.
+/// </summary>
+public sealed class FakeLiveSpeechPlugin : PuckPlugin<NoSettings>, IStreamingSpeechToText
+{
+    public override string Id => "fake-live-speech";
+    public override string Name => "Fake live speech";
+    public override string Description => "A test live speech engine.";
+
+    public string EngineId => "fake-live";
+    public string EngineName => "Fake live STT";
+    public bool IsReady => true;
+
+    public Func<int, (string Text, bool Ended)> Hear { get; set; } = _ => ("", false);
+    public volatile bool FailToOpen;
+    public int BatchCalls;
+    public ConcurrentQueue<FakeLiveStream> Streams { get; } = new();
+
+    public Task<string> TranscribeAsync(AudioClip audio, string? language, CancellationToken cancel)
+    {
+        Interlocked.Increment(ref BatchCalls);
+        return Task.FromResult("from the recording");
+    }
+
+    public Task<ISpeechStream?> StartStreamAsync(SpeechStreamOptions options, CancellationToken cancel)
+    {
+        if (FailToOpen) return Task.FromResult<ISpeechStream?>(null);
+        var stream = new FakeLiveStream(this, options);
+        Streams.Enqueue(stream);
+        return Task.FromResult<ISpeechStream?>(stream);
+    }
+
+    public void Reset()
+    {
+        Hear = _ => ("", false);
+        FailToOpen = false;
+        BatchCalls = 0;
+        Streams.Clear();
+    }
+}
+
+public sealed class FakeLiveStream(FakeLiveSpeechPlugin owner, SpeechStreamOptions options) : ISpeechStream
+{
+    readonly object _gate = new();
+    int _samples;
+    string _text = "";
+    bool _ended;
+
+    public SpeechStreamOptions Options => options;
+    public int Samples { get { lock (_gate) return _samples; } }
+    public volatile bool Finished, Disposed;
+
+    public void Send(ReadOnlySpan<short> samples)
+    {
+        bool changed;
+        lock (_gate)
+        {
+            _samples += samples.Length;
+            var (text, ended) = owner.Hear(_samples);
+            changed = text != _text || ended != _ended;
+            _text = text;
+            _ended = ended;
+        }
+        // As a real engine would: from its own thread, a moment later
+        if (changed) _ = Task.Run(() => Changed?.Invoke());
+    }
+
+    public string Text { get { lock (_gate) return _text; } }
+    public bool Ended { get { lock (_gate) return _ended; } }
+    public bool Failed => false;
+    public event Action? Changed;
+
+    public Task<string> FinishAsync(CancellationToken cancel)
+    {
+        Finished = true;
+        return Task.FromResult(Text);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Disposed = true;
+        return default;
+    }
+}
+
 public static class Signals
 {
     public static short[] Sine(double hz, int rate, int count, double amplitude, double phase = 0)

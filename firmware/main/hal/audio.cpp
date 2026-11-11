@@ -204,6 +204,15 @@ int16_t s_speech[kBlock];
 
 uint32_t s_rounds = 0, s_underruns = 0;
 
+// Talking over the puck (see hal.h)
+std::atomic<bool> s_bargeArmed{false};
+std::atomic<bool> s_bargeHeard{false};
+std::atomic<uint32_t> s_bargeCount{0};
+constexpr size_t kRecent = kRate / 2;        // the half second kept, for the words that set it off
+int16_t* s_recent = nullptr;
+size_t s_recentPos = 0;
+bool s_recentFull = false;
+
 void audioTask(void*) {
   ToneVoice tone;
   bool ampOn = false;
@@ -213,6 +222,24 @@ void audioTask(void*) {
   int playingId = -1;
   float hpX = 0, hpY = 0;         // DC blocker on the mic
   float micEnv = 0, spkEnv = 0;
+  // Talking over the puck: the speaker's own sound reaches the mics. How much of it (the echo
+  // path, learned while it speaks) and the room's noise (learned in its pauses) set how loud the
+  // mics must be before it's someone talking.
+  bool armed = false;
+  // What the speaker played, block by block: its sound reaches the mics ~0.1 s later (the I2S
+  // buffers, the room), so the echo is compared with the loudest of the last quarter second
+  constexpr int kRefBlocks = 25;
+  float refHist[kRefBlocks] = {};
+  int refIdx = 0;
+  float refEnv = 0;          // that loudest, held a little longer (the room's reverb)
+  float coupling = -1;       // mic RMS per unit of speaker RMS: the echo's peaks
+  float secM = 0, secRef = 0, secQ = 0, secRatio = 0;  // this second's highs (logged)
+  int secBlocks = 0;
+  float noise = 150;         // mic RMS while the speaker is quiet
+  int learned = 0, hot = 0;  // blocks of echo learned; blocks of "someone's talking" (leaky)
+  float peak = 0;            // the closest it came to setting off, this reply (logged)
+  uint32_t blocks = 0;
+  float micRms = 0;
 
   for (;;) {
     // ---- in: 10 ms from the mics (this read paces the whole loop)
@@ -230,7 +257,26 @@ void audioTask(void*) {
       s_micGainApplied = g;
     }
 
-    if (s_micOn.load() && s_micOk) {
+    bool armNow = s_bargeArmed.load() && s_micOk;
+    if (armNow != armed) {
+      if (armNow) {
+        refEnv = 0;
+        for (float& r : refHist) r = 0;
+        coupling = -1;
+        secM = secRef = secQ = secRatio = 0;
+        secBlocks = 0;
+        learned = hot = 0;
+        peak = 0;
+        blocks = 0;
+        s_recentPos = 0;
+        s_recentFull = false;
+      } else if (blocks > 50) {
+        hal::logLine("[barge] reply over: %lu blocks, closest %.2f of the way, echo %.3f, noise %.0f", (unsigned long)blocks,
+                     (double)peak, (double)coupling, (double)noise);
+      }
+      armed = armNow;
+    }
+    if ((s_micOn.load() || armed) && s_micOk) {
       float sumSq = 0;
       for (int i = 0; i < frames; i++) {
         int l = s_rx[2 * i], r = s_rx[2 * i + 1];
@@ -244,8 +290,14 @@ void audioTask(void*) {
         s_mono[i] = (int16_t)y;
         sumSq += y * y;
       }
-      s_mic.write(s_mono, frames);
+      if (s_micOn.load()) s_mic.write(s_mono, frames);
+      if (armed && s_recent) {
+        for (int i = 0; i < frames; i++) s_recent[(s_recentPos + i) % kRecent] = s_mono[i];
+        s_recentPos = (s_recentPos + frames) % kRecent;
+        if (s_recentPos < (size_t)frames) s_recentFull = true;
+      }
       float rms = sqrtf(sumSq / frames);
+      micRms = rms;
       float lvl = log10f(1.0f + rms) / 4.0f;  // ~0 (silence) .. ~1 (shouting)
       micEnv = lvl > micEnv ? lvl : micEnv * 0.85f + lvl * 0.15f;
       s_micLevel = micEnv > 1 ? 1 : micEnv;
@@ -331,6 +383,52 @@ void audioTask(void*) {
     spkEnv = lvl > spkEnv ? lvl : spkEnv * 0.85f + lvl * 0.15f;
     s_spkLevel = spkEnv;
 
+    if (armed) {
+      blocks++;
+      refHist[refIdx] = sqrtf(sumSq / frames);
+      refIdx = (refIdx + 1) % kRefBlocks;
+      float refMax = 0;
+      for (float r : refHist) refMax = r > refMax ? r : refMax;
+      refEnv = refMax > refEnv ? refMax : refEnv * 0.85f;  // a room's reverb fades ~1.5 dB per 10 ms
+      const float m = micRms;
+      if (refEnv > 150) {
+        // The speaker's sound: learn the most of it that comes back (the peaks, so a loud
+        // syllable isn't taken for someone talking). Up quickly, down slowly; not from moments
+        // far above it, which are someone talking.
+        const float q = m / refEnv;
+        if (coupling < 0) coupling = q;
+        else if (learned < 50 || q < coupling * 2.0f) coupling = q > coupling ? coupling + (q - coupling) * 0.25f : coupling * 0.9995f;
+        if (q > secQ) secQ = q;
+        learned++;
+      } else {
+        noise = m < noise ? noise * 0.9f + m * 0.1f : noise * 0.995f + m * 0.005f;
+      }
+      const float echo = coupling > 0 ? coupling * refEnv : 0;
+      const float need = std::max(echo * 2.0f, noise * 3.0f) + 300.0f;
+      const float ratio = m / need;
+      if (m > secM) secM = m;
+      if (refEnv > secRef) secRef = refEnv;
+      if (learned >= 50 && ratio > secRatio) secRatio = ratio;
+      if (++secBlocks >= 100) {
+        hal::logLine("[barge] 1s: mic %.0f, speaker %.0f, echo/speaker %.3f (learned %.3f), closest %.2f", (double)secM,
+                     (double)secRef, (double)secQ, (double)coupling, (double)secRatio);
+        secM = secRef = secQ = secRatio = 0;
+        secBlocks = 0;
+      }
+      // Half a second of its own speech first (to know its echo); then about a quarter second of
+      // mostly-loud sound is someone talking
+      const bool loud = learned >= 50 && ratio > 1.0f;
+      hot = loud ? hot + 1 : (hot >= 2 ? hot - 2 : 0);
+      if (learned >= 50 && ratio > peak) peak = ratio;
+      if (hot >= 24) {
+        hal::logLine("[barge] someone's talking: mic %.0f, echo %.0f, noise %.0f", (double)m, (double)echo, (double)noise);
+        s_bargeCount++;
+        s_bargeHeard = true;
+        s_bargeArmed = false;
+        armed = false;
+      }
+    }
+
     size_t wrote;
     i2s_channel_write(s_txCh, s_tx, frames * 2 * sizeof(int16_t), &wrote, 100);
   }
@@ -341,7 +439,8 @@ void audioTask(void*) {
 bool audioOk() { return s_ok; }
 
 int audioDiag(char* buf, size_t len) {
-  return snprintf(buf, len, "audio:%d mic:%d micOn:%d lvl:%.2f spk:%d q:%u under:%u rounds:%u",
+  return snprintf(buf, len, "barge:%lu audio:%d mic:%d micOn:%d lvl:%.2f spk:%d q:%u under:%u rounds:%u",
+                  (unsigned long)s_bargeCount.load(),
                   (int)s_ok, (int)s_micOk, (int)s_micOn.load(), (double)s_micLevel.load(), s_spkId.load(),
                   (unsigned)s_spk.available(), (unsigned)s_underruns, (unsigned)s_rounds);
 }
@@ -415,6 +514,31 @@ void micStart() {
 }
 
 void micStop() { detail::s_micOn = false; }
+
+void bargeArm(bool on) {
+  if (on && !detail::s_recent)
+    detail::s_recent = (int16_t*)heap_caps_malloc(detail::kRecent * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!on) detail::s_bargeHeard = false;
+  detail::s_bargeArmed = on;
+}
+
+bool bargeTaken() { return detail::s_bargeHeard.exchange(false); }
+
+void micStartWithPreroll() {
+  detail::s_mic.clear();
+  if (detail::s_recent) {
+    // oldest first
+    size_t n = detail::s_recentFull ? detail::kRecent : detail::s_recentPos;
+    size_t from = detail::s_recentFull ? detail::s_recentPos : 0;
+    for (size_t done = 0; done < n;) {
+      size_t at = (from + done) % detail::kRecent;
+      size_t chunk = std::min(n - done, detail::kRecent - at);
+      detail::s_mic.write(detail::s_recent + at, chunk);
+      done += chunk;
+    }
+  }
+  detail::s_micOn = true;
+}
 
 bool micActive() { return detail::s_micOn.load() && detail::s_micOk; }
 

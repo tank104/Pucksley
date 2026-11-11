@@ -41,6 +41,11 @@ public sealed partial class SpeechService(SettingsStore settings, PluginManager 
 
     public Task<string> TranscribeAsync(short[] samples, CancellationToken cancel) => TranscribeAsync(samples, null, cancel);
 
+    /// <summary>An engine that can recognise live, by id (null = the chosen one), if it can.</summary>
+    public IStreamingSpeechToText? LiveEngine(string? engineId) =>
+        (engineId is null ? Stt : plugins.SttEngines.FirstOrDefault(e => e.EngineId.Equals(engineId, StringComparison.OrdinalIgnoreCase)))
+        as IStreamingSpeechToText;
+
     /// <summary>With a particular engine (by id), e.g. to compare them; null = the chosen one.</summary>
     public async Task<string> TranscribeAsync(short[] samples, string? engineId, CancellationToken cancel)
     {

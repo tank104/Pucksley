@@ -83,7 +83,10 @@ void setAi(AiState s) {
   if (s == before) return;
   g_model.ai = s;
   g_model.aiSince = millis();
+  // While it speaks (to the hub), listen for the person talking over it
+  hal::bargeArm(s == AiState::Speaking && g_model.barge && g_model.linked && !g_model.direct);
   if (s == AiState::Listening) {
+    MODEL_SET(g_model.heard, "");  // live words arrive as they're recognised
     if (!hal::micActive()) {
       hal::micStart();
       hal::beep(Tone::Listen);
@@ -411,6 +414,7 @@ void onLine(uint8_t tp, char* line, size_t len) {
     if (doc["spk"].is<int>()) g_model.spk = clampv(doc["spk"].as<int>(), 0, 100);
     if (doc["mic"].is<int>()) g_model.micGain = clampv(doc["mic"].as<int>(), 0, 37);
     if (doc["lift"].is<bool>()) g_model.lift = doc["lift"].as<bool>();
+    if (doc["barge"].is<bool>()) g_model.barge = doc["barge"].as<bool>();
     if (doc["name"].is<const char*>()) MODEL_SET(g_model.puckName, doc["name"].as<const char*>());
     applyCfgToHal();
     storeSaveCfgSoon();

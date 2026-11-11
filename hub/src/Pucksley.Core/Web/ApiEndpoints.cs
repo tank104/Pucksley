@@ -379,7 +379,7 @@ public static partial class ApiEndpoints
         });
 
         // Speech to text only: body a WAV, ?engine= to pick one (to compare them). Reports how long it took.
-        api.MapPost("/voice/transcribe", async (HttpContext ctx, SpeechService speech) =>
+        api.MapPost("/voice/transcribe", async (HttpContext ctx, SpeechService speech, SettingsStore settings) =>
         {
             using var ms = new MemoryStream();
             await ctx.Request.Body.CopyToAsync(ms, ctx.RequestAborted).ConfigureAwait(false);
@@ -388,6 +388,14 @@ public static partial class ApiEndpoints
             catch (FormatException e) { return Results.BadRequest(new { error = e.Message }); }
             var pcm = Resampler.Convert(clip.Samples, clip.SampleRate, SpeechService.Rate);
             var engine = ctx.Request.Query["engine"].FirstOrDefault();
+            // ?live=1: through the engine's live recognition, the clip played in at real time (with
+            // 2 s of quiet after it, as a person pausing), timing when the words and the end came
+            if (ctx.Request.Query["live"].FirstOrDefault() is "1" or "true")
+            {
+                var live = speech.LiveEngine(string.IsNullOrWhiteSpace(engine) ? null : engine);
+                if (live is null) return Results.BadRequest(new { error = "That engine can't recognise live" });
+                return Results.Json(await LiveTranscriptionTestAsync(live, pcm, settings, ctx.RequestAborted).ConfigureAwait(false));
+            }
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
@@ -446,6 +454,56 @@ public static partial class ApiEndpoints
     static JsonObject Engine(string id, string name, bool ready) => new() { ["id"] = id, ["name"] = name, ["ready"] = ready };
 
     /// <summary>What another hub needs to use this one's tools: the MCP address and key, and its own setting lines.</summary>
+    /// <summary>
+    /// Plays <paramref name="pcm"/> into live recognition at real time, then 2 s of quiet, and times
+    /// it: when the first words came, when the engine said they'd finished (after the speech's
+    /// end), and how long the final words took after that.
+    /// </summary>
+    static async Task<JsonObject> LiveTranscriptionTestAsync(IStreamingSpeechToText engine, short[] pcm, SettingsStore settings, CancellationToken cancel)
+    {
+        var v = settings.Current.Voice;
+        var lang = string.IsNullOrWhiteSpace(v.Language) ? null : v.Language.Trim();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await using var stream = await engine.StartStreamAsync(new SpeechStreamOptions(lang, v.EndSilenceMs), cancel).ConfigureAwait(false)
+                                 ?? throw new PluginException("Live recognition isn't available");
+        long connected = clock.ElapsedMilliseconds, firstWords = -1, ended = -1;
+        var partials = new List<string>();
+        stream.Changed += () =>
+        {
+            var t = stream.Text;
+            lock (partials)
+            {
+                if (firstWords < 0 && t.Length > 0) firstWords = clock.ElapsedMilliseconds;
+                if (ended < 0 && stream.Ended) ended = clock.ElapsedMilliseconds;
+                if (t.Length > 0 && (partials.Count == 0 || partials[^1] != t)) partials.Add(t);
+            }
+        };
+        const int chunk = SpeechService.Rate / 50;   // 20 ms
+        var all = pcm.Concat(new short[SpeechService.Rate * 2]).ToArray();
+        long start = clock.ElapsedMilliseconds;
+        for (int off = 0; off < all.Length && ended < 0; off += chunk)
+        {
+            stream.Send(all.AsSpan(off, Math.Min(chunk, all.Length - off)));
+            var due = start + (off + chunk) * 1000L / SpeechService.Rate;
+            var wait = due - clock.ElapsedMilliseconds;
+            if (wait > 0) await Task.Delay((int)wait, cancel).ConfigureAwait(false);
+        }
+        long speechEnd = start + pcm.Length * 1000L / SpeechService.Rate;
+        long finishing = clock.ElapsedMilliseconds;
+        var text = await stream.FinishAsync(cancel).ConfigureAwait(false);
+        long done = clock.ElapsedMilliseconds;
+        lock (partials)
+            return new JsonObject
+            {
+                ["text"] = text,
+                ["connectMs"] = connected,
+                ["firstWordsMsAfterStart"] = firstWords < 0 ? null : firstWords - start,
+                ["endedMsAfterSpeech"] = ended < 0 ? null : ended - speechEnd,
+                ["finalMsAfterEnd"] = done - finishing,
+                ["partials"] = new JsonArray(partials.Select(p => (JsonNode)p).ToArray()),
+            };
+    }
+
     static JsonObject SharingJson(SettingsStore settings, HubRuntime runtime)
     {
         var sh = settings.Current.Sharing;

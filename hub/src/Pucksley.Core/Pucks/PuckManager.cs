@@ -372,6 +372,7 @@ public sealed partial class PuckManager : IAsyncDisposable
             ["spk"] = Math.Clamp(r.SpeakerVolume, 0, 100),
             ["mic"] = Math.Clamp(r.MicGain, 0, 37),
             ["lift"] = r.LiftToTalk,
+            ["barge"] = r.TalkOver,
             ["name"] = r.DisplayName,
         };
         if (via is not null) via.Send(cfg); else s.Send(cfg);

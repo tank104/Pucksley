@@ -79,6 +79,9 @@ public:
     // report" (bus error, no ack) from "the finger lifted" (a report with no points, or a release)
     enum ReadStatus : uint8_t { ReadPoints, ReadBusError, ReadNoAck, ReadNoPoints, ReadRelease };
     ReadStatus lastRead = ReadNoAck;
+    uint8_t lastState = 0;    // the first finger's state nibble in the last report (0x06 = touching)
+    uint8_t lastCount = 0;    // how many fingers the last report said
+    uint8_t lastReport[7] = {};  // its first bytes, as read
 
     bool isPressed();
 

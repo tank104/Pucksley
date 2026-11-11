@@ -82,14 +82,14 @@ hub   {"t":"ai","s":"idle"}                         (or {"t":"listen"} for a fol
 
 | Message | Dir | Fields | Meaning |
 |---|---|---|---|
-| `talk` | P→H | `a`: `start`/`stop`/`cancel`; `via`: `tap`/`lift`/`hub` | Start listening (mic frames follow), end of the utterance, or throw it away. `start` while the hub is speaking interrupts it. |
+| `talk` | P→H | `a`: `start`/`stop`/`cancel`; `via`: `tap`/`lift`/`hub`/`voice` | Start listening (mic frames follow), end of the utterance, or throw it away. `start` while the hub is speaking interrupts it. `voice`: the person talked over the puck while it spoke (the mic frames start with the half second before it noticed). After `hub` or `voice`, nothing clear said ends quietly (no "didn't catch that"). |
 | `ai` | H→P | `s`: `idle`/`listening`/`thinking`/`speaking`/`error`; `text` (error message) | The assistant's state. The puck stops streaming the mic on anything but `listening`. |
-| `heard` | H→P | `text` (≤ 300) | What the person said (the transcript). |
+| `heard` | H→P | `text` (≤ 300), `partial` bool | What the person said (the transcript). `partial`: the words so far, while they're still talking (live recognition); the puck shows them as it listens. |
 | `reply` | H→P | `text` (≤ 700, the whole reply so far), `done` bool | The answer as it is written. |
 | `act` | H→P | `icon`, `text` (≤ 60), `s`: `run`/`ok`/`err` | A tool is running / ran ("Kitchen 30%"). Icons: `music` `volume` `heat` `light` `tv` `plug` `search` `timer` `pc` `home` `note` `weather` `tool`. |
 | `spk` | H→P | `a`: `start`/`end`/`stop`; `id` | Speech audio follows / no more audio for `id` (play out what's buffered) / stop now and flush. |
 | `spk` | P→H | `s`: `done`; `id` | The puck finished playing utterance `id` (or it was stopped). |
-| `listen` | H→P | | Start listening as if tapped (follow-up question). The puck replies with `talk start` `via:"hub"`. |
+| `listen` | H→P | | Start listening as if tapped: after an answer, for the person's reply (unless they said thanks or that was all). The puck replies with `talk start` `via:"hub"`. |
 
 ## Talking face
 
@@ -117,7 +117,7 @@ hub   {"t":"fv","a":"end"}                          no more frames: the puck pla
 | Message | Dir | Fields | Meaning |
 |---|---|---|---|
 | `time` | H→P | `epoch` (unix s, UTC), `tz` (minutes east of UTC), `tzp` (the zone as a POSIX TZ rule, e.g. `NZST-12NZDT,M9.5.0,M4.1.0/3`) | After welcome and every 10 min. The puck sets its own clock and zone from it, so it keeps local time (daylight saving included) with no hub. |
-| `cfg` | H→P | any of `bright` 10–100, `sound` bool, `dim` s, `off` s (0 = never), `sens` 0.25–4, `flip` bool, `spk` 0–100 speaker volume, `mic` 0–37 mic gain dB, `lift` bool (lift to talk), `name` str | Device settings. Partial updates allowed. |
+| `cfg` | H→P | any of `bright` 10–100, `sound` bool, `dim` s, `off` s (0 = never), `sens` 0.25–4, `flip` bool, `spk` 0–100 speaker volume, `mic` 0–37 mic gain dB, `lift` bool (lift to talk), `barge` bool (talking over the puck while it speaks interrupts it), `name` str | Device settings. Partial updates allowed. |
 | `state` | H→P | any of `title`, `artist`, `src` (room/app), `play` bool, `vol` 0–100, `mute` bool | Now playing, for the home face. Partial updates allowed. |
 | `notify` | H→P | `text` (≤ 120), `kind`: `info`/`ai`/`alert`, `chime` bool | A banner for ~4 s (timer done, reminder, …). |
 | `face` | H→P | `f` face id | Show a face. |
