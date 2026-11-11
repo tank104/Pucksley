@@ -78,7 +78,7 @@ public sealed class DirectSetupTests
 
         var claude = messages[0];
         Assert.Equal("sk-ant-123", S(claude, "key"));
-        Assert.Equal("claude-opus-5-5", S(claude, "model"));
+        Assert.Equal("claude-haiku-5-5", S(claude, "model"));
         Assert.Equal("low", S(claude, "effort"));
         Assert.True(claude["search"]!.GetValue<bool>());
         Assert.Equal(5, claude["keep"]!.GetValue<int>());

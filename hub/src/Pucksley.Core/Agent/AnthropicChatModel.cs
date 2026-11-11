@@ -72,21 +72,23 @@ public sealed class AnthropicChatModel(ILogger<AnthropicChatModel> log) : IChatM
                     var parameters = BuildParams(req, round == req.MaxToolRounds);
                     var aggregator = new BetaMessageContentAggregator();
                     bool textBlockOpen = false, afterFallback = false;
+                    // Text resuming after a tool or a search reads as a new sentence and needs a space;
+                    // text blocks back to back are one passage split by citations ("about 5.29%" + ", and"),
+                    // so nothing goes between them. Decided at the block's first words: never before punctuation.
+                    bool previousWasText = false, spaceDue = false;
 
                     // CollectAsync hands every event back while the aggregator keeps the whole message
                     await foreach (var ev in client.Beta.Messages.CreateStreaming(parameters, cancel).CollectAsync(aggregator).ConfigureAwait(false))
                     {
                         if (ev.TryPickContentBlockStart(out var start))
                         {
-                            if (start.ContentBlock.TryPickBetaText(out _))
+                            bool isText = start.ContentBlock.TryPickBetaText(out _);
+                            if (!isText) previousWasText = false;
+                            if (isText)
                             {
-                                // A new text block after earlier text (e.g. after a tool) starts a new sentence;
-                                // after a fallback marker the next model carries on the same text instead
-                                if (answer.Length > 0 && !char.IsWhiteSpace(answer[^1]) && !afterFallback)
-                                {
-                                    answer.Append(' ');
-                                    cb.OnText(" ");
-                                }
+                                // Text after a tool or search starts a new sentence; after a fallback marker the
+                                // next model carries on the same text, and back-to-back blocks are one passage
+                                spaceDue = answer.Length > 0 && !char.IsWhiteSpace(answer[^1]) && !afterFallback && !previousWasText;
                                 textBlockOpen = true;
                                 afterFallback = false;
                             }
@@ -103,11 +105,21 @@ public sealed class AnthropicChatModel(ILogger<AnthropicChatModel> log) : IChatM
                         else if (ev.TryPickContentBlockDelta(out var delta) && delta.Delta.TryPickText(out var text))
                         {
                             if (!textBlockOpen) continue;
+                            if (spaceDue && text.Text.Length > 0)
+                            {
+                                spaceDue = false;
+                                if (!char.IsWhiteSpace(text.Text[0]) && ",.;:!?)%'’\"".IndexOf(text.Text[0]) < 0)
+                                {
+                                    answer.Append(' ');
+                                    cb.OnText(" ");
+                                }
+                            }
                             answer.Append(text.Text);
                             cb.OnText(text.Text);
                         }
                         else if (ev.TryPickContentBlockStop(out _))
                         {
+                            if (textBlockOpen) previousWasText = true;
                             textBlockOpen = false;
                         }
                     }
@@ -295,7 +307,7 @@ public sealed class AnthropicChatModel(ILogger<AnthropicChatModel> log) : IChatM
             }
             if (req.WebSearch)
             {
-                bool latest = StartsWithAny(req.Model, NewWebToolPrefixes);
+                bool latest = StartsWithAny(req.Model, NewWebToolPrefixes) && !req.QuickWebSearch;
                 var location = new BetaUserLocation { City = req.City, Country = req.Country, Timezone = req.TimeZone };
                 if (latest)
                 {
@@ -304,7 +316,7 @@ public sealed class AnthropicChatModel(ILogger<AnthropicChatModel> log) : IChatM
                 }
                 else
                 {
-                    tools.Add(new BetaWebSearchTool20250305 { MaxUses = 3, UserLocation = location });
+                    tools.Add(new BetaWebSearchTool20250305 { MaxUses = req.QuickWebSearch ? 2 : 3, UserLocation = location });
                 }
             }
 

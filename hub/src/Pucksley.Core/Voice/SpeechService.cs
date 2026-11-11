@@ -39,9 +39,13 @@ public sealed partial class SpeechService(SettingsStore settings, PluginManager 
         }
     }
 
-    public async Task<string> TranscribeAsync(short[] samples, CancellationToken cancel)
+    public Task<string> TranscribeAsync(short[] samples, CancellationToken cancel) => TranscribeAsync(samples, null, cancel);
+
+    /// <summary>With a particular engine (by id), e.g. to compare them; null = the chosen one.</summary>
+    public async Task<string> TranscribeAsync(short[] samples, string? engineId, CancellationToken cancel)
     {
-        var engine = Stt ?? throw new PluginException("No speech recognition engine is set up. Choose one on the hub's Voice page.");
+        var engine = engineId is null ? Stt : plugins.SttEngines.FirstOrDefault(e => e.EngineId.Equals(engineId, StringComparison.OrdinalIgnoreCase));
+        if (engine is null) throw new PluginException(engineId is null ? "No speech recognition engine is set up. Choose one on the hub's Voice page." : $"There's no speech recognition engine called {engineId}.");
         if (!engine.IsReady) throw new PluginException($"{engine.EngineName} isn't set up yet (see the Plugins page).");
         var lang = settings.Current.Voice.Language;
         var text = await engine.TranscribeAsync(new AudioClip(samples, Rate), string.IsNullOrWhiteSpace(lang) ? null : lang.Trim(), cancel).ConfigureAwait(false);

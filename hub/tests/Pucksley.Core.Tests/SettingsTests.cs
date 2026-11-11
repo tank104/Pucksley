@@ -29,6 +29,7 @@ public sealed class DemoSettings
     [Setting("Volume", Order = 8)] public double Volume { get; set; } = 0.5;
     [Setting("Enabled", Order = 9)] public bool Enabled { get; set; } = true;
     [Setting("Latitude", Order = 10)] public double? Latitude { get; set; }
+    [Setting("Look", Order = 11, Options = ["one", "two"], Pictures = true)] public string Look { get; set; } = "one";
     /// <summary>An OAuth refresh token the plugin saves itself.</summary>
     [Secret] public string RefreshToken { get; set; } = "";
     public string AccountName { get; set; } = "";
@@ -130,7 +131,7 @@ public sealed class SettingsStoreTests
         File.WriteAllText(path, """{"port": 9999, "somethingFromTheFuture": 1, "plugins": {"Agent-Tools": {"enabled": false}}}""");
         var s = new SettingsStore(path).Current;
         Assert.Equal(9999, s.Port);
-        Assert.Equal("claude-opus-5-5", s.Assistant.Model);
+        Assert.Equal("claude-haiku-5-5", s.Assistant.Model);
         Assert.False(s.Plugins["agent-tools"].Enabled);   // plugin ids are case-insensitive
     }
 
@@ -166,7 +167,7 @@ public sealed class SettingsSchemaTests
     {
         var schema = SettingsSchema.Describe(typeof(DemoSettings));
         var keys = schema["fields"]!.AsArray().Select(f => f!["key"]!.GetValue<string>()).ToList();
-        Assert.Equal(["host", "apiKey", "devices", "rooms", "mode", "flavour", "notes", "volume", "enabled", "latitude"], keys);   // hidden ones absent
+        Assert.Equal(["host", "apiKey", "devices", "rooms", "mode", "flavour", "notes", "volume", "enabled", "latitude", "look"], keys);   // hidden ones absent
 
         Assert.Equal("string", Field(schema, "host")["type"]!.GetValue<string>());
         Assert.Equal("192.168.1.2", Field(schema, "host")["placeholder"]!.GetValue<string>());
@@ -176,6 +177,9 @@ public sealed class SettingsSchemaTests
         Assert.Equal("select", Field(schema, "mode")["type"]!.GetValue<string>());
         Assert.Equal(["Auto", "Manual"], Field(schema, "mode")["options"]!.AsArray().Select(o => o!.GetValue<string>()));
         Assert.Equal(["sweet", "sour"], Field(schema, "flavour")["options"]!.AsArray().Select(o => o!.GetValue<string>()));
+        Assert.Equal("select", Field(schema, "flavour")["type"]!.GetValue<string>());
+        Assert.Equal("pictures", Field(schema, "look")["type"]!.GetValue<string>());
+        Assert.Equal(["one", "two"], Field(schema, "look")["options"]!.AsArray().Select(o => o!.GetValue<string>()));
         Assert.Equal("text", Field(schema, "notes")["type"]!.GetValue<string>());
         Assert.True(Field(schema, "notes")["advanced"]!.GetValue<bool>());
         Assert.Equal("number", Field(schema, "volume")["type"]!.GetValue<string>());

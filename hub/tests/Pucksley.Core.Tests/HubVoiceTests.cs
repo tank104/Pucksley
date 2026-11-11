@@ -22,6 +22,20 @@ public sealed class HubVoiceTests(HubFixture hub) : HubTestBase(hub)
     static int Index(List<PuckFrame> frames, Func<PuckFrame, bool> match) => frames.FindIndex(f => match(f));
 
     [Fact]
+    public async Task A_web_search_before_any_answer_is_covered_by_a_spoken_let_me_check()
+    {
+        Hub.Claude.Then(Reply("end_turn", [ServerToolUse("srvtoolu_v1", "web_search", """{"query":"wellington weather"}"""), WebSearchResult("srvtoolu_v1"), TextBlock("It's sunny in Wellington.")], delayMs: 5));
+        await using var puck = await Hub.ConnectApprovedAsync();
+
+        var frames = await AskAsync(puck);
+        var replies = frames.Concat(await puck.DrainAsync(TimeSpan.FromMilliseconds(100))).Where(f => f.Type == "reply").Select(f => f.Json!).ToList();
+
+        // Said first, once; not part of the answer on the screen
+        Assert.Equal(["Let me check.", "It's sunny in Wellington."], Hub.Speech.Spoken);
+        Assert.Equal("It's sunny in Wellington.", S(replies.Single(r => r["done"]!.GetValue<bool>()), "text"));
+    }
+
+    [Fact]
     public async Task A_whole_turn_with_a_tool_ends_idle()
     {
         Hub.Claude

@@ -46,8 +46,12 @@ public sealed class AssistantSettings
         Help = "From console.anthropic.com → API keys. Falls back to the ANTHROPIC_API_KEY environment variable.")]
     public string AnthropicApiKey { get; set; } = "";
 
-    [Setting("Model", Order = 1, Help = "Claude model id. claude-opus-5-5 is the default; any current model id works.")]
-    public string Model { get; set; } = "claude-opus-5-5";
+    [Setting("Model", Order = 1, Help = "Claude model id for everyday answers. claude-haiku-5-5 (the default) answers fastest; any current model id works.")]
+    public string Model { get; set; } = "claude-haiku-5-5";
+
+    [Setting("Model for harder questions", Order = 1, Placeholder = "none: the model above answers everything",
+        Help = "When a question needs real thought (reasoning, planning, advice, explaining, writing), the everyday model hands it to this one, which answers in its place. claude-opus-5-5 is the default; empty turns it off.")]
+    public string DeepModel { get; set; } = "claude-opus-5-5";
 
     [Setting("Effort", Order = 2, Options = ["low", "medium", "high"],
         Help = "How hard Claude thinks before answering. Low keeps spoken answers quick.")]

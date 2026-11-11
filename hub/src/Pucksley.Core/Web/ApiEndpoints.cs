@@ -116,7 +116,8 @@ public static partial class ApiEndpoints
                 ctx.Request.Query.ToDictionary(q => q.Key, q => q.Value.ToString()),
                 ctx.Request.Headers.ToDictionary(x => x.Key, x => x.Value.ToString()), body);
             var res = await h.Plugin.HandleHttpAsync(req, ctx.RequestAborted).ConfigureAwait(false);
-            return res is null ? Results.NotFound() : Results.Content(res.Body, res.ContentType, Encoding.UTF8, res.Status);
+            if (res is null) return Results.NotFound();
+            return res.Data is { } data ? Results.Bytes(data, res.ContentType) : Results.Content(res.Body, res.ContentType, Encoding.UTF8, res.Status);
         });
 
         var api = app.MapGroup("/api");
@@ -375,6 +376,25 @@ public static partial class ApiEndpoints
                 return Results.Bytes(wav, "audio/wav");
             }
             catch (PluginException e) { return Results.BadRequest(new { error = e.Message }); }
+        });
+
+        // Speech to text only: body a WAV, ?engine= to pick one (to compare them). Reports how long it took.
+        api.MapPost("/voice/transcribe", async (HttpContext ctx, SpeechService speech) =>
+        {
+            using var ms = new MemoryStream();
+            await ctx.Request.Body.CopyToAsync(ms, ctx.RequestAborted).ConfigureAwait(false);
+            AudioClip clip;
+            try { clip = Wav.Decode(ms.ToArray()); }
+            catch (FormatException e) { return Results.BadRequest(new { error = e.Message }); }
+            var pcm = Resampler.Convert(clip.Samples, clip.SampleRate, SpeechService.Rate);
+            var engine = ctx.Request.Query["engine"].FirstOrDefault();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var text = await speech.TranscribeAsync(pcm, string.IsNullOrWhiteSpace(engine) ? null : engine, ctx.RequestAborted).ConfigureAwait(false);
+                return Results.Json(new { text, ms = sw.ElapsedMilliseconds, engine });
+            }
+            catch (PluginException e) { return Results.BadRequest(new { error = e.Message, ms = sw.ElapsedMilliseconds }); }
         });
 
         api.MapPost("/voice/ask", async (HttpContext ctx, SpeechService speech, AgentService agent) =>

@@ -21,6 +21,9 @@ public sealed class AgentCallbacks
 
     /// <summary>Ask the person to confirm something drastic. Null = allowed (typed in the web page).</summary>
     public Func<string, Task<bool>>? Confirm { get; init; }
+
+    /// <summary>A tool is starting, by name (web_search, think_harder, sonos_play...), before it runs.</summary>
+    public Action<string>? OnToolStarted { get; init; }
 }
 
 /// <summary>
@@ -42,7 +45,37 @@ public sealed class AgentService
         public IChatSession Session { get; } = session;
         public string Fingerprint { get; } = fingerprint;
         public DateTimeOffset LastUsed { get; set; } = DateTimeOffset.UtcNow;
+
+        /// <summary>The conversation so far in plain words, for the model that takes harder questions.</summary>
+        public List<(string Person, string Answer)> Transcript { get; } = [];
     }
+
+    /// <summary>The everyday model's way to hand a question to the model for harder questions.</summary>
+    public const string ThinkHarder = "think_harder";
+
+    static readonly ToolDefinition ThinkHarderTool = new()
+    {
+        Name = ThinkHarder,
+        Description =
+            "Hand this question to a more capable model, which answers the person in your place (its answer is spoken as it's written, so you write nothing). " +
+            "Use it when the question needs real thought: multi-step maths or logic, planning, weighing up options, advice about health, money or the law, explaining how or why something works, writing something, code, or when the person asks you to think carefully. " +
+            "Don't use it for controlling things, timers, weather, quick facts, simple lookups or small talk. Call it straight away, before writing anything.",
+        InputSchema = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["question"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = "The person's question in full, with whatever it depends on from earlier in the conversation.",
+                },
+            },
+            ["required"] = new JsonArray("question"),
+        },
+        Handler = _ => Task.FromResult(ToolResult.Error("The hub runs this itself.")),
+        Icon = "note",
+    };
 
     public AgentService(SettingsStore settings, PluginManager plugins, IChatModel model, HubEvents events, ILogger<AgentService> log, Func<IHubRuntime> runtime)
     {
@@ -76,7 +109,9 @@ public sealed class AgentService
             return TurnResult.Error("I need a Claude API key first. Add one on the hub's Assistant page.");
 
         var system = BuildSystemPrompt(s);
-        var tools = _plugins.Tools;
+        var deep = s.Assistant.DeepModel?.Trim() ?? "";
+        bool canEscalate = deep.Length > 0 && !deep.Equals(s.Assistant.Model.Trim(), StringComparison.OrdinalIgnoreCase);
+        IReadOnlyList<ToolDefinition> tools = canEscalate ? [.. _plugins.Tools, ThinkHarderTool] : _plugins.Tools;
         var city = CityOf(s.Household.Location);
         var country = CountryCode(s.Household.Location);
         var timeZone = _runtime().TimeZone.Id.Contains('/') ? _runtime().TimeZone.Id : null;
@@ -114,19 +149,40 @@ public sealed class AgentService
         };
 
         var started = DateTimeOffset.UtcNow;
-        var result = await conv.Session.RunTurnAsync(request, new Callbacks(this, caller, callbacks, sessionKey), cancel).ConfigureAwait(false);
+        var turnCallbacks = new Callbacks(this, caller, callbacks, sessionKey) { Conversation = conv, Context = context, DeepModel = canEscalate ? deep : null };
+        var result = await conv.Session.RunTurnAsync(request, turnCallbacks, cancel).ConfigureAwait(false);
+        // Answered by the model for harder questions: that's the answer (the everyday model was told to add nothing)
+        if (turnCallbacks.Escalated is { } deepAnswer && !result.Failed) result = new TurnResult(deepAnswer);
         conv.LastUsed = DateTimeOffset.UtcNow;
+        if (!result.Failed)
+        {
+            conv.Transcript.Add((userText, result.Text));
+            if (conv.Transcript.Count > 12) conv.Transcript.RemoveAt(0);
+        }
         _events.Conversation(sessionKey, caller.PuckName ?? "web", result.Failed ? "error" : "assistant", result.Text);
-        _log.LogInformation("Turn for {Who} took {Ms} ms{Failed}", caller.PuckName ?? "web", (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds, result.Failed ? " (failed)" : "");
+        _log.LogInformation("Turn for {Who} took {Ms} ms{Model}{Failed}", caller.PuckName ?? "web", (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds,
+            turnCallbacks.Escalated is not null ? $" (handed to {deep})" : "", result.Failed ? " (failed)" : "");
         return result;
     }
 
     sealed class Callbacks(AgentService owner, ToolCaller caller, AgentCallbacks cb, string sessionKey) : ITurnCallbacks
     {
-        public void OnText(string delta) => cb.OnText?.Invoke(delta);
+        public Conversation? Conversation { get; init; }
+        public string Context { get; init; } = "";
+        public string? DeepModel { get; init; }
+
+        /// <summary>The answer from the model for harder questions, once it has given one.</summary>
+        public string? Escalated { get; private set; }
+
+        // After a hand-over the everyday model's own words (if any) aren't spoken
+        public void OnText(string delta)
+        {
+            if (Escalated is null) cb.OnText?.Invoke(delta);
+        }
 
         public void OnToolStarted(string toolName, JsonObject? input)
         {
+            cb.OnToolStarted?.Invoke(toolName);
             var (icon, text) = owner.Describe(toolName, input);
             cb.OnActivity?.Invoke(icon, text, "run");
             owner._events.Conversation(sessionKey, caller.PuckName ?? "web", "tool", input is null ? toolName : $"{toolName} {input.ToJsonString()}");
@@ -134,6 +190,20 @@ public sealed class AgentService
 
         public async Task<ToolResult> ExecuteToolAsync(string toolName, JsonObject input, CancellationToken cancel)
         {
+            if (toolName == ThinkHarder && DeepModel is not null && Conversation is not null && Escalated is null)
+            {
+                var question = input["question"]?.GetValue<string>() ?? "";
+                var answer = await owner.AnswerHarderAsync(Conversation, Context, question, DeepModel, caller, cb, sessionKey, cancel).ConfigureAwait(false);
+                if (answer is null)
+                {
+                    cb.OnActivity?.Invoke("note", "Thinking it through failed", "err");
+                    return ToolResult.Error("The other model couldn't answer just now. Answer the person yourself.");
+                }
+                Escalated = answer;
+                cb.OnActivity?.Invoke("note", "Thought it through", "ok");
+                return ToolResult.Ok("The more capable model has answered, and the person has already heard it, word for word: \"" + answer +
+                                     "\". Your turn is over: write nothing more. (For follow-ups, that answer is what was said.)");
+            }
             var result = await owner._plugins.ExecuteToolAsync(toolName, input, caller, cb.Confirm, cancel).ConfigureAwait(false);
             var (icon, text) = owner.Describe(toolName, input);
             var shown = !string.IsNullOrWhiteSpace(result.Activity) ? result.Activity! : result.IsError ? $"{text} failed" : text;
@@ -142,6 +212,58 @@ public sealed class AgentService
                 result.Text.Length > 500 ? result.Text[..500] + "…" : result.Text);
             return result;
         }
+    }
+
+    /// <summary>
+    /// A harder question, answered by the bigger model in a one-off conversation: the system
+    /// prompt, the context, the conversation so far in plain words, and web search (not the home's
+    /// tools). Its text streams straight to whoever asked. Null when it fails.
+    /// </summary>
+    async Task<string?> AnswerHarderAsync(Conversation conv, string context, string question, string model, ToolCaller caller, AgentCallbacks cb, string sessionKey, CancellationToken cancel)
+    {
+        var s = _settings.Current;
+        var sb = new StringBuilder();
+        sb.Append("[Context]\n").Append(context).Append("\n[/Context]\n\n");
+        sb.AppendLine("(You were handed this question because it needs careful thought. You have web search here but not the home's other tools. Your answer is spoken aloud as you write it: plain sentences, no headings, lists or bold, and as short as the question allows; offer more detail rather than giving it all.)");
+        if (conv.Transcript.Count > 0)
+        {
+            sb.AppendLine().AppendLine("The conversation so far:");
+            foreach (var (person, answer) in conv.Transcript.TakeLast(6)) sb.Append("Person: ").AppendLine(person).Append("You: ").AppendLine(answer);
+        }
+        sb.AppendLine().Append(string.IsNullOrWhiteSpace(question) ? "(the person's last question)" : question.Trim());
+        var request = new TurnRequest
+        {
+            SystemPrompt = BuildSystemPrompt(s),
+            UserText = sb.ToString(),
+            Tools = [],
+            ApiKey = ApiKey ?? "",
+            Model = model,
+            Effort = s.Assistant.Effort,
+            MaxTokens = Math.Clamp(s.Assistant.MaxTokens, 1024, 64000),
+            MaxToolRounds = 3,
+            WebSearch = s.Assistant.WebSearch,
+            QuickWebSearch = true,
+            City = CityOf(s.Household.Location),
+            Country = CountryCode(s.Household.Location),
+            TimeZone = _runtime().TimeZone.Id.Contains('/') ? _runtime().TimeZone.Id : null,
+        };
+        var started = DateTimeOffset.UtcNow;
+        double firstWordsMs = -1;
+        var timed = new AgentCallbacks
+        {
+            OnText = d =>
+            {
+                if (firstWordsMs < 0) firstWordsMs = (DateTimeOffset.UtcNow - started).TotalMilliseconds;
+                cb.OnText?.Invoke(d);
+            },
+            OnActivity = cb.OnActivity,
+            Confirm = cb.Confirm,
+            OnToolStarted = cb.OnToolStarted,
+        };
+        var result = await _model.CreateSession().RunTurnAsync(request, new Callbacks(this, caller, timed, sessionKey), cancel).ConfigureAwait(false);
+        _log.LogInformation("Harder question for {Who} answered by {Model}: first words after {First:0} ms, all in {Ms} ms{Failed}", caller.PuckName ?? "web", model,
+            firstWordsMs, (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds, result.Failed ? " (failed)" : "");
+        return result.Failed || string.IsNullOrWhiteSpace(result.Text) ? null : result.Text.Trim();
     }
 
     /// <summary>An icon and a few words for the puck's activity line while a tool runs.</summary>
@@ -153,6 +275,7 @@ public sealed class AgentService
             return ("search", q is null ? "Searching the web" : $"Searching: {Shorten(q, 30)}");
         }
         if (toolName is "web_fetch") return ("search", "Reading a web page");
+        if (toolName is ThinkHarder) return ("note", "Thinking it through");
         var tool = _plugins.Tools.FirstOrDefault(t => t.Name == toolName);
         var plugin = tool?.PluginId is { } pid ? _plugins.Find(pid)?.Plugin : null;
         var icon = tool?.Icon ?? plugin?.Icon ?? "tool";
@@ -189,6 +312,7 @@ public sealed class AgentService
         sb.AppendLine("- Everything you write is spoken aloud. Use plain sentences only: no markdown, bullet points, headings, tables, emoji or code (unless code is asked for). Don't read out URLs; name the site instead. Write numbers, times and units the way you'd say them.");
         sb.AppendLine("- What you hear comes from speech recognition, so words can be wrong or missing. Work out what was meant; if it's genuinely unclear, ask one short question.");
         sb.AppendLine("- For news, weather, prices, scores, opening hours or anything else that changes, look it up (tools or web search) instead of guessing, and say briefly where it came from if it matters.");
+        sb.AppendLine("- When you need a tool or a web search, call it straight away without writing anything first: no notes to yourself and no \"let me check\" (the puck says that for you). Everything you write is spoken.");
         sb.AppendLine("- When you've done something with a tool, confirm it in a few words (\"Done, the kitchen's at 30.\"). Don't describe the tool or repeat raw data.");
         sb.AppendLine("- If something fails, say so plainly and offer one next step.");
         sb.AppendLine("- Ask before anything drastic or hard to undo unless the person clearly asked for it.");

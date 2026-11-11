@@ -78,6 +78,8 @@ public sealed class OpensplineSession : IAsyncDisposable
         form.Add(new StringContent(quality), "quality");
         using var response = await _http.PostAsync(new Uri(_base, "v1/sessions"), form, cancel).ConfigureAwait(false);
         var text = await response.Content.ReadAsStringAsync(cancel).ConfigureAwait(false);
+        if ((int)response.StatusCode == 429)
+            throw new OpensplineBusyException(Shorten(text));
         if (!response.IsSuccessStatusCode)
             throw new PluginException($"Openspline wouldn't start the avatar ({(int)response.StatusCode}): {Shorten(text)}");
         var body = JsonNode.Parse(text) ?? throw new PluginException("Openspline's answer was empty");
@@ -411,3 +413,6 @@ public sealed class OpensplineSession : IAsyncDisposable
         _stop.Dispose();
     }
 }
+
+/// <summary>Openspline has no free worker for a new avatar (429): another session holds it, or it's stuck.</summary>
+public sealed class OpensplineBusyException(string detail) : Exception($"Openspline has no free worker: {detail}");

@@ -29,6 +29,13 @@ public sealed class SettingAttribute(string label) : Attribute
     /// <summary>Fixed choices for a string (a dropdown).</summary>
     public string[]? Options { get; init; }
 
+    /// <summary>
+    /// Shows the <see cref="Options"/> as pictures to click instead of a dropdown. The page loads each
+    /// one from <c>/plugins/{id}/pictures/{key}/{option}</c>, which the plugin answers in
+    /// <see cref="IPlugin.HandleHttpAsync"/> with <see cref="PluginHttpResponse.Bytes"/>.
+    /// </summary>
+    public bool Pictures { get; init; }
+
     /// <summary>Sort order on the form (then declaration order).</summary>
     public int Order { get; init; }
 

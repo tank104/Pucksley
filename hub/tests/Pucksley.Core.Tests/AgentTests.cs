@@ -576,4 +576,64 @@ public sealed class AgentTests
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"took {sw.Elapsed}");
         Assert.DoesNotContain("Kitchen lights", h.Claude.Requests[0].LastUserText());
     }
+
+    [Fact]
+    public async Task A_harder_question_is_answered_by_the_bigger_model_word_for_word()
+    {
+        var h = await AgentHarness.CreateAsync(s =>
+        {
+            s.Assistant.Model = "claude-haiku-5-5";
+            s.Assistant.DeepModel = "claude-opus-5-5";
+        });
+        h.Claude
+            .Then(Reply("tool_use", [ToolUse("toolu_T", "think_harder", """{"question":"Should we fix the mortgage for two years or five?"}""")]))
+            .Then(Text("It depends on where you think rates are heading. Five years buys certainty."))
+            .Then(Text("Anything the everyday model adds is not spoken."));
+        var cb = new RecordingCallbacks();
+
+        var result = await h.AskAsync("should we fix the mortgage for two years or five?", cb);
+
+        Assert.False(result.Failed, result.Text);
+        Assert.Equal("It depends on where you think rates are heading. Five years buys certainty.", result.Text);
+        Assert.Equal(result.Text, cb.Streamed);
+        var (everyday, bigger, closing) = (h.Claude.Requests[0], h.Claude.Requests[1], h.Claude.Requests[2]);
+        Assert.Equal("claude-haiku-5-5", everyday.Body["model"]!.GetValue<string>());
+        Assert.Contains("think_harder", everyday.ToolNames);
+        Assert.Equal("claude-opus-5-5", bigger.Body["model"]!.GetValue<string>());
+        Assert.DoesNotContain("think_harder", bigger.ToolNames);
+        Assert.Contains("Should we fix the mortgage for two years or five?", bigger.LastUserText());
+        // The everyday model is told what was said, so follow-ups make sense
+        Assert.Contains("Five years buys certainty", closing.Messages.ToJsonString());
+        Assert.Contains(cb.Activities, a => a.Text == "Thinking it through");
+    }
+
+    [Fact]
+    public async Task Without_a_model_for_harder_questions_there_is_no_hand_over()
+    {
+        var h = await AgentHarness.CreateAsync(s =>
+        {
+            s.Assistant.Model = "claude-haiku-5-5";
+            s.Assistant.DeepModel = "";
+        });
+        h.Claude.Then(Text("Hi."));
+        await h.AskAsync("hello");
+        Assert.DoesNotContain("think_harder", h.Claude.Requests[0].ToolNames);
+    }
+
+    [Fact]
+    public async Task Text_split_by_citations_reads_as_one_passage()
+    {
+        var h = await AgentHarness.CreateAsync(s => s.Assistant.WebSearch = true);
+        // How a cited answer streams: each cited fact is its own text block, mid-sentence
+        h.Claude.Then(Reply("end_turn", [
+            ServerToolUse("srvtoolu_c1", "web_search", """{"query":"mortgage rates"}"""), WebSearchResult("srvtoolu_c1"),
+            TextBlock("Two-year rates are about 5.29%"), TextBlock(", and five-year rates are about 5.75%"), TextBlock(". "),
+            TextBlock("So it's close")]));
+        var cb = new RecordingCallbacks();
+
+        var result = await h.AskAsync("rates?", cb);
+
+        Assert.Equal("Two-year rates are about 5.29%, and five-year rates are about 5.75%. So it's close", result.Text);
+        Assert.Equal(result.Text, cb.Streamed);
+    }
 }

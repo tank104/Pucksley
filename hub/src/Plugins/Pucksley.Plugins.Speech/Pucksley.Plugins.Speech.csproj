@@ -14,6 +14,10 @@
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The talking face's ready-made faces (and their thumbnails for the settings page) -->
+    <EmbeddedResource Include="Openspline\Faces\*.jpg" LogicalName="Openspline.Faces.%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="Pucksley.Plugins.Speech.Tests" />
   </ItemGroup>
 </Project>

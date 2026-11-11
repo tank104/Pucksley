@@ -22,6 +22,7 @@ constexpr uint32_t kSwipeMaxMs = 400;
 constexpr int kSwipeMinPx = 60;
 constexpr uint32_t kMoveEventMs = 16;     // TouchMove events to the faces at most ~60 Hz
 constexpr float kTwoFingerScrollPx = 30;  // trackpad: two-finger drag, px per scroll notch
+constexpr uint32_t kQuietReleaseMs = 1200;  // a finger down but no fresh report for this long: take it as lifted
 
 TouchDrvCST92xx s_touch;
 bool s_ok = false;
@@ -43,7 +44,8 @@ struct Gesture {
 } g;
 
 uint32_t s_lastTapUpMs = 0;
-uint8_t s_emptyReads = 0;  // a lone empty read mid-drag is a glitch, not a release
+uint8_t s_emptyReads = 0;  // a lone empty report mid-drag is a glitch, not a release
+uint32_t s_lastReportMs = 0;  // the chip's last fresh report (points or not) while a finger was down
 int16_t s_lastTapX = 0, s_lastTapY = 0;
 
 inline int16_t clampCoord(int v, int max) { return (int16_t)(v < 0 ? 0 : (v > max - 1 ? max - 1 : v)); }
@@ -190,6 +192,8 @@ void probeTouch() {
 }
 
 std::atomic<uint32_t> s_touchReads{0}, s_touchPoints{0};
+// What the reads came back as: points, bus error, no fresh report, no points, release
+std::atomic<uint32_t> s_readKinds[5] = {};
 
 bool touchBegin() {
   // Reset pulse first: the controller may be wedged from before a soft reboot.
@@ -214,7 +218,9 @@ bool touchBegin() {
 }
 
 int touchDiag(char* buf, size_t len) {
-  return snprintf(buf, len, "treads=%lu tpts=%lu ", (unsigned long)s_touchReads.load(), (unsigned long)s_touchPoints.load());
+  return snprintf(buf, len, "treads=%lu tpts=%lu tkinds=%lu/%lu/%lu/%lu/%lu ", (unsigned long)s_touchReads.load(),
+                  (unsigned long)s_touchPoints.load(), (unsigned long)s_readKinds[0].load(), (unsigned long)s_readKinds[1].load(),
+                  (unsigned long)s_readKinds[2].load(), (unsigned long)s_readKinds[3].load(), (unsigned long)s_readKinds[4].load());
 }
 
 void touchModeChanged(InputMode mode) {
@@ -232,23 +238,46 @@ void touchPoll(uint32_t now) {
   // nothing touches it is short and harmless.
   int16_t xs[2] = {0, 0}, ys[2] = {0, 0};
   uint8_t n;
+  TouchDrvCST92xx::ReadStatus kind;
   {
     I2cGuard lock;
     n = s_touch.getPoint(xs, ys, 2);
+    kind = s_touch.lastRead;
   }
   s_touchReads++;
-  if (n > 0) {
-    if (s_touchPoints++ == 0) hal::logLine("[hal] touch: first touch at %d,%d", xs[0], ys[0]);
-    s_emptyReads = 0;
-    if (!s_fingerDown.exchange(true)) s_fingerDownMs = now;
-    const int16_t x = clampCoord(xs[0], LCD_W), y = clampCoord(ys[0], LCD_H);
-    if (!g.down) onPress(x, y, n, now);
-    else onHold(x, y, n, now);
-  } else if (g.down && ++s_emptyReads >= 2) {
+  if (kind < 5) s_readKinds[kind]++;
+  auto release = [&] {
     s_emptyReads = 0;
     onRelease(now);
     s_fingerDown = false;
     s_fingerUpMs = now;
+  };
+  if (n > 0) {
+    if (s_touchPoints++ == 0) hal::logLine("[hal] touch: first touch at %d,%d", xs[0], ys[0]);
+    s_emptyReads = 0;
+    s_lastReportMs = now;
+    if (!s_fingerDown.exchange(true)) s_fingerDownMs = now;
+    const int16_t x = clampCoord(xs[0], LCD_W), y = clampCoord(ys[0], LCD_H);
+    if (!g.down) onPress(x, y, n, now);
+    else onHold(x, y, n, now);
+    return;
+  }
+  if (!g.down) return;
+  switch (kind) {
+    case TouchDrvCST92xx::ReadRelease:
+      // The chip says the finger came up (it says so once)
+      release();
+      break;
+    case TouchDrvCST92xx::ReadNoPoints:
+      s_lastReportMs = now;
+      if (++s_emptyReads >= 2) release();
+      break;
+    default:
+      // No fresh report (the chip only has one when something changed) or a bus hiccup: that's
+      // not a lift. A finger resting still is still down, and still makes a long press.
+      if (now - s_lastReportMs >= kQuietReleaseMs) release();
+      else if (!g.moved && !g.longFired && !g.swallowed) onHold(g.x, g.y, g.maxFingers, now);
+      break;
   }
 }
 

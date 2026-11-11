@@ -19,8 +19,12 @@ public sealed record PluginHttpRequest(
 
 public sealed record PluginHttpResponse(int Status, string ContentType, string Body)
 {
+    /// <summary>A binary body (a picture…); when set, it's sent instead of <see cref="Body"/>.</summary>
+    public byte[]? Data { get; init; }
+
     public static PluginHttpResponse Html(string html, int status = 200) => new(status, "text/html; charset=utf-8", html);
     public static PluginHttpResponse Text(string text, int status = 200) => new(status, "text/plain; charset=utf-8", text);
+    public static PluginHttpResponse Bytes(byte[] data, string contentType) => new(200, contentType, "") { Data = data };
 }
 
 public enum StatusLevel { Idle, Ok, Warning, Error }

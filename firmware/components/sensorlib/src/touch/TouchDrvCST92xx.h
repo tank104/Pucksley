@@ -75,6 +75,11 @@ public:
 
     uint8_t getPoint(int16_t *x_array, int16_t *y_array, uint8_t get_point);
 
+    // Pucksley: why the last getPoint() returned what it did, so a poller can tell "no fresh
+    // report" (bus error, no ack) from "the finger lifted" (a report with no points, or a release)
+    enum ReadStatus : uint8_t { ReadPoints, ReadBusError, ReadNoAck, ReadNoPoints, ReadRelease };
+    ReadStatus lastRead = ReadNoAck;
+
     bool isPressed();
 
     const char *getModelName();

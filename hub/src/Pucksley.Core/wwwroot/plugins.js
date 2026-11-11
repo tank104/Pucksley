@@ -210,6 +210,7 @@ function createPanel(id, { onClose }) {
         values: d.values,
         saveLabel: 'Save',
         emptyText: 'This plugin has nothing to set up.',
+        pictureBase: `/plugins/${enc(d.id)}/`,
         onSave: async (values) => {
           const fresh = await put(`/api/plugins/${enc(d.id)}/settings`, values);
           refreshStatus();

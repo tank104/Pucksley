@@ -50,7 +50,7 @@ public static class SettingsSchema
             }
             else if (attr.Options is { Length: > 0 })
             {
-                f["type"] = "select";
+                f["type"] = attr.Pictures ? "pictures" : "select";
                 f["options"] = new JsonArray(attr.Options.Select(o => (JsonNode)o).ToArray());
             }
             else f["type"] = attr.Multiline ? "text" : "string";

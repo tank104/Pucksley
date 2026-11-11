@@ -1,4 +1,4 @@
-// Schema-driven settings forms (the hub's SettingsSchema): string text int number bool select lines list,
+// Schema-driven settings forms (the hub's SettingsSchema): string text int number bool select pictures lines list,
 // secrets (masked), advanced fields, help, save states, unsaved-changes tracking.
 
 import { h, clear, uid, linkify, capitalize, spinner } from './dom.js';
@@ -21,7 +21,8 @@ export function discardAll() {
 }
 
 /**
- * createForm({ schema, values, onSave, custom, saveLabel, onChange, emptyText, extraActions })
+ * createForm({ schema, values, onSave, custom, saveLabel, onChange, emptyText, extraActions, pictureBase })
+ * pictureBase: where 'pictures' fields load their pictures from (a plugin's '/plugins/{id}/').
  * onSave(values) → {schema, values} | undefined  (throw to show an error)
  * custom: { key: (def, value, ctx) => control } replaces a field's input.
  * A control is { id, el, get(), set(v), validate?(), focus?(), destroy?(), describe?(ids), invalid?(on) }.
@@ -75,6 +76,7 @@ export function createForm(opts) {
       onChange?.(api);
     },
     custom,
+    pictureBase: opts.pictureBase || '',
   };
 
   function build(schema, values) {
@@ -222,8 +224,8 @@ function fieldWrap(def, control) {
     wrap = h('div', { class: 'field field-bool' },
       h('div', { class: 'field-text' }, h('label', { class: 'field-label', for: id }, def.label), help, err),
       control.el);
-  } else if (type === 'list') {
-    wrap = h('fieldset', { class: 'field field-list' }, h('legend', { class: 'field-label' }, def.label), help, control.el, err);
+  } else if (type === 'list' || (type === 'pictures' && !control.custom)) {
+    wrap = h('fieldset', { class: `field field-${type}` }, h('legend', { class: 'field-label' }, def.label), help, control.el, err);
   } else {
     wrap = h('div', { class: `field field-${type}` }, h('label', { class: 'field-label', for: id }, def.label), control.el, help, err);
   }
@@ -243,6 +245,7 @@ export function makeControl(def, value, ctx) {
     case 'int':
     case 'number': return numberControl(def, value, ctx);
     case 'select': return selectControl(def, value, ctx);
+    case 'pictures': return picturesControl(def, value, ctx);
     case 'text': return textControl(def, value, ctx, true);
     case 'lines': return linesControl(def, value, ctx);
     case 'list': return listControl(def, value, ctx);
@@ -333,6 +336,38 @@ function selectControl(def, value, ctx) {
   };
   render(value);
   return { id, el: selectWrap(sel), get: () => sel.value, set: render, ...common(sel) };
+}
+
+/** Choices shown as pictures (from the plugin: ctx.pictureBase + key/option), one to click. */
+function picturesControl(def, value, ctx) {
+  const id = ctx.id(def.key);
+  const name = `${id}-pick`;
+  const opts = (def.options || []).map(String);
+  const radios = [];
+  const grid = h('div', { id, class: 'pictures', role: 'radiogroup' });
+  opts.forEach((o, i) => {
+    const radio = h('input', { type: 'radio', name, value: o, class: 'picture-radio', onChange: ctx.changed });
+    const label = `${def.label} ${i + 1}`;
+    const img = h('img', { class: 'picture-img', alt: label, loading: 'lazy', draggable: 'false',
+      src: ctx.pictureBase ? `${ctx.pictureBase}pictures/${encodeURIComponent(def.key)}/${encodeURIComponent(o)}` : '' });
+    img.addEventListener('error', () => img.classList.add('is-missing'), { once: true });
+    radios.push(radio);
+    grid.append(h('label', { class: 'picture', title: label }, radio, img));
+  });
+  const set = (v) => {
+    const cur = v == null || v === '' ? opts[0] : String(v);
+    for (const r of radios) r.checked = r.value === cur;
+  };
+  set(value);
+  return {
+    id,
+    el: grid,
+    get: () => radios.find((r) => r.checked)?.value ?? '',
+    set,
+    focus: () => (radios.find((r) => r.checked) || radios[0])?.focus(),
+    describe: (ids) => grid.setAttribute('aria-describedby', ids),
+    invalid: (on) => grid.setAttribute('aria-invalid', on ? 'true' : 'false'),
+  };
 }
 
 function boolControl(def, value, ctx) {

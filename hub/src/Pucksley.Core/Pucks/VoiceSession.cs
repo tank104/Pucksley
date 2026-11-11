@@ -272,6 +272,7 @@ public sealed class VoiceSession
         var splitter = new SentenceSplitter();
         var sentences = Channel.CreateUnbounded<string>();
         long lastReplySent = 0;
+        bool filled = false;   // said "let me check" (or similar) already this turn
         var replyClock = Stopwatch.StartNew();
 
         var speaker = SpeakLoopAsync(sentences.Reader, cancel);
@@ -293,6 +294,23 @@ public sealed class VoiceSession
             OnActivity = (icon, text, state) =>
                 _puck.Send(new JsonObject { ["t"] = "act", ["icon"] = icon, ["text"] = Clip(text, 60), ["s"] = state }),
             Confirm = question => _puck.ConfirmAsync(question, TimeSpan.FromSeconds(30), cancel),
+            // Something slow before any answer (a web search, the bigger model): say so, once, so the wait isn't silent
+            OnToolStarted = name =>
+            {
+                var line = name switch
+                {
+                    "web_search" or "web_fetch" => "Let me check.",
+                    AgentService.ThinkHarder => "Let me think about that.",
+                    _ => null,
+                };
+                if (line is null) return;
+                lock (reply)
+                {
+                    if (filled || reply.ToString().Trim().Length > 0) return;
+                    filled = true;
+                }
+                sentences.Writer.TryWrite(line);
+            },
         };
 
         var result = await _agent.AskAsync(_puck.SessionKey, transcript, _puck.Caller, callbacks, cancel).ConfigureAwait(false);
@@ -524,6 +542,8 @@ public sealed class VoiceSession
         var gotMedia = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bool faceFailed = false;
         int frames = 0;
+        double firstSpeechMs = -1, firstMediaMs = -1, firstAudioOutMs = -1, endSentMs = -1, oneSecondSentMs = -1;
+        long sentToFace = 0;
         using var faceCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
 
         void Start()
@@ -558,12 +578,14 @@ public sealed class VoiceSession
             var decimate = new Decimator();
             await foreach (var media in face.ReadAsync(faceCts.Token).ConfigureAwait(false))
             {
+                if (firstMediaMs < 0) firstMediaMs = clock.Elapsed.TotalMilliseconds;
                 gotMedia.TrySetResult();
                 Start();
                 var pcm = media.SampleRate == Rate ? media.Audio
                     : media.SampleRate == Rate * Decimator.Factor ? decimate.Process(media.Audio)
                     : throw new PluginException($"The face sent {media.SampleRate} Hz audio");
                 if (media.Jpeg.Length > 0 && _puck.SendVideoFrame(media.Jpeg, sent)) frames++;
+                if (firstAudioOutMs < 0) firstAudioOutMs = clock.Elapsed.TotalMilliseconds;
                 await PlayAsync(pcm, faceCts.Token).ConfigureAwait(false);
             }
         }, CancellationToken.None);
@@ -585,11 +607,14 @@ public sealed class VoiceSession
                     {
                         spoken.Add(chunk);
                         spokenMs += chunk.Length * 1000.0 / Rate;
+                        if (firstSpeechMs < 0) firstSpeechMs = clock.Elapsed.TotalMilliseconds;
                         if (faceFailed) continue;
                         try
                         {
                             await face.SendAudioAsync(chunk, Rate, cancel).ConfigureAwait(false);
                             if (firstSentMs < 0) firstSentMs = clock.Elapsed.TotalMilliseconds;
+                            sentToFace += chunk.Length;
+                            if (oneSecondSentMs < 0 && sentToFace >= Rate) oneSecondSentMs = clock.Elapsed.TotalMilliseconds;
                         }
                         catch (PluginException e)
                         {
@@ -605,6 +630,7 @@ public sealed class VoiceSession
                 }
             }
 
+            endSentMs = clock.Elapsed.TotalMilliseconds;
             if (!faceFailed)
             {
                 try { await face.EndAsync(cancel).ConfigureAwait(false); }
@@ -645,7 +671,8 @@ public sealed class VoiceSession
             {
                 _puck.Send(new JsonObject { ["t"] = "spk", ["a"] = "end", ["id"] = id });
                 _puck.Send(new JsonObject { ["t"] = "fv", ["a"] = "end" });   // the talking face is done: back to the usual face
-                _log.LogDebug("Talking face: {Frames} frames for {Seconds:0.0} s of speech", frames, sent / (double)Rate);
+                _log.LogInformation("Talking face: {Frames} frames for {Seconds:0.0} s of speech; first speech {Speech:0} ms, a second of it at the face {OneSecond:0} ms, all speech sent {End:0} ms, first frame {Media:0} ms, first audio to the puck {Out:0} ms",
+                    frames, sent / (double)Rate, firstSpeechMs, oneSecondSentMs, endSentMs, firstMediaMs, firstAudioOutMs);
                 var remaining = Math.Max(0, bufferedUntilMs - clock.Elapsed.TotalMilliseconds);
                 var done = _playbackDone?.Task ?? Task.CompletedTask;
                 await Task.WhenAny(done, Task.Delay(TimeSpan.FromMilliseconds(remaining + 2500), cancel)).ConfigureAwait(false);

@@ -521,6 +521,18 @@ textarea.input { resize: vertical; line-height: 1.5; min-height: 84px; }
 .field-bool .field-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .field-bool .switch { margin-top: 1px; }
 .field-list > legend { margin-bottom: 7px; }
+.field-pictures > legend { margin-bottom: 7px; }
+
+/* Choices shown as pictures (a face, a style…): round, the chosen one ringed */
+.pictures { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 12px; max-width: 640px; }
+.picture { position: relative; display: block; aspect-ratio: 1; border-radius: 50%; cursor: pointer; }
+.picture-radio { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.picture-img { width: 100%; height: 100%; display: block; border-radius: 50%; object-fit: cover; background: #000;
+  box-shadow: 0 0 0 1px var(--border); transition: box-shadow 0.12s, transform 0.12s; }
+.picture-img.is-missing { visibility: hidden; }
+.picture:hover .picture-img { transform: scale(1.04); }
+.picture-radio:checked + .picture-img { box-shadow: 0 0 0 3px var(--surface, #fff), 0 0 0 6px var(--accent); }
+.picture-radio:focus-visible + .picture-img { outline: 2px solid var(--accent); outline-offset: 7px; }
 .field-text.field-text { flex: 1; }
 
 .sform-advanced { margin-top: 26px; border-top: 1px solid var(--border); padding-top: 14px; }

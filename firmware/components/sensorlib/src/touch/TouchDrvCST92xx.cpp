@@ -125,6 +125,7 @@ uint8_t TouchDrvCST92xx::getPoint(int16_t *x_array, int16_t *y_array, uint8_t ge
     //Write read command
     write_buffer[0] = highByte(CST92XX_READ_COMMAND);
     write_buffer[1] = lowByte(CST92XX_READ_COMMAND);
+    lastRead = ReadBusError;
     res = comm->writeThenRead(write_buffer, 2, read_buffer, sizeof(read_buffer));
     if (res != 0) {
         log_e("Write read command error");
@@ -143,6 +144,7 @@ uint8_t TouchDrvCST92xx::getPoint(int16_t *x_array, int16_t *y_array, uint8_t ge
     // check device ack
     if (read_buffer[6] != CST92XX_ACK) {
         // log_e("Check device ack error , response code is  0x%x", read_buffer[6]);
+        lastRead = ReadNoAck;
         return 0;
     }
 
@@ -161,6 +163,7 @@ uint8_t TouchDrvCST92xx::getPoint(int16_t *x_array, int16_t *y_array, uint8_t ge
 
     numPoints = (read_buffer[5] & 0x7F);
     if (numPoints > CST92XX_MAX_FINGER_NUM || numPoints == 0) {
+        lastRead = numPoints == 0 ? ReadNoPoints : ReadNoAck;
         return 0;
     }
 
@@ -186,11 +189,13 @@ uint8_t TouchDrvCST92xx::getPoint(int16_t *x_array, int16_t *y_array, uint8_t ge
 
     if (point_info[0].evt == 0x00) {
         log_d("Release finger ....");
+        lastRead = ReadRelease;
         return 0;
     }
 
     updateXY(numPoints, x_array, y_array);
 
+    lastRead = ReadPoints;
     return numPoints;
 }
 

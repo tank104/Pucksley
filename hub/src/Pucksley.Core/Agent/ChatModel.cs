@@ -40,6 +40,8 @@ public sealed record TurnRequest
     public int MaxTokens { get; init; } = 16000;
     public int MaxToolRounds { get; init; } = 10;
     public bool WebSearch { get; init; } = true;
+    /// <summary>The plain web search (at most two), not the slower one that filters results with code: for answers someone is waiting to hear.</summary>
+    public bool QuickWebSearch { get; init; }
     /// <summary>For web search results near home.</summary>
     public string? City { get; init; }
     public string? Country { get; init; }
