@@ -21,6 +21,10 @@ void frameData(const uint8_t* data, size_t len);
 void end();   // the reply is over: show what's left, then give the screen back
 void stop();  // stop now (interrupted)
 
+// While held off (the power-off question is up) frames are turned away, so a reply's last frames
+// still on their way can't take the screen back from it.
+void holdOff(bool on);
+
 // The UI loop asks every round. True while the face has the screen: don't render then.
 // It also does the hand-over (LVGL's last flush out first, the faces redrawn afterwards).
 bool screenTaken();

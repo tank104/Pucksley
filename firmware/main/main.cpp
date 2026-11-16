@@ -27,10 +27,13 @@ void uiTask(void*) {
       hal::micStartWithPreroll();
     }
     if (face_video::screenTaken()) {
-      // The talking face has the panel: no rendering, but a tap or the button still stops the reply
+      // The talking face has the panel: no rendering, but a tap or the button still stops the reply,
+      // and holding the button asks to power off (that stops the face itself)
       InputEvent e;
       while (hal::pollEvent(e))
-        if (e.type == Ev::Tap || e.type == Ev::Button || e.type == Ev::LongPress || e.type == Ev::DoubleTap) {
+        if (e.type == Ev::ButtonLong) {
+          ui::handleInput(e);
+        } else if (e.type == Ev::Tap || e.type == Ev::Button || e.type == Ev::LongPress || e.type == Ev::DoubleTap) {
           face_video::stop();
           hub::talk("cancel");
         }

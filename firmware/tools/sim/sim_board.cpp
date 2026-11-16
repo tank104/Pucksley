@@ -158,3 +158,10 @@ void closeSetupPortal() {
 bool portalOpen() { return s_portal; }
 void forgetWifi() {}
 }  // namespace hub
+
+// No talking face in the simulator
+#include "face_video.h"
+namespace face_video {
+void stop() {}
+void holdOff(bool) {}
+}  // namespace face_video

@@ -16,6 +16,7 @@
 #include <freertos/task.h>
 #include "../config.h"
 #include "hal_internal.h"
+#include "esp_aec.h"
 
 namespace hal {
 namespace detail {
@@ -213,6 +214,77 @@ int16_t* s_recent = nullptr;
 size_t s_recentPos = 0;
 bool s_recentFull = false;
 
+// ---- talking over the puck: echo cancellation
+//
+// The mics hear the puck's own speaker at up to ~20000 RMS, far louder than someone a metre away,
+// so loudness alone can't tell them apart. ESP-SR's echo canceller (full-duplex mode) takes the
+// mics and what was played, and leaves the mics without the echo: someone talking over it stands
+// out in what's left. What was played reaches the mics late (the I2S buffers, the air), so the
+// reference is delayed to line up; the delay is measured from each reply and logged.
+struct Canceller {
+  aec_handle_t* aec = nullptr;
+  int chunk = 0;                       // samples per AEC frame
+  int16_t *mic = nullptr, *ref = nullptr, *out = nullptr;
+  int fill = 0;
+  static constexpr int kDelayCap = 8192;
+  int16_t* line = nullptr;             // what was played, newest at pos
+  int pos = 0;
+  // per 10 ms block, for measuring the echo's delay
+  static constexpr int kEnv = 600;
+  float *envMic = nullptr, *envRef = nullptr;
+  int envN = 0;
+
+  bool begin() {
+    // Its working memory in PSRAM: internal RAM is short once Wi-Fi is up
+    aec_config_t cfg = {};
+    cfg.mic_num = 1;
+    cfg.ref_num = 1;
+    cfg.out_num = 1;
+    cfg.filter_length = 2;   // 32 ms of tail (the delay line takes out the rest). 4 cancels more but slows the talking face to ~14 fps (they share the cache); 3 misbehaves
+    cfg.sample_rate = kRate;
+    cfg.caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;   // internal: Wi-Fi then fails to connect
+    cfg.mode = AEC_MODE_FD_LOW_COST;
+    cfg.nlp_level = AEC_NLP_LEVEL_AGGR;
+    aec = aec_create_from_config(&cfg);
+    if (!aec) return false;
+    chunk = aec_get_chunksize(aec);
+    auto alloc = [](size_t n) { return (int16_t*)heap_caps_aligned_alloc(16, n * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); };
+    mic = alloc(chunk);
+    ref = alloc(chunk);
+    out = alloc(chunk);
+    line = (int16_t*)heap_caps_calloc(kDelayCap, sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    envMic = (float*)heap_caps_malloc(kEnv * sizeof(float), MALLOC_CAP_SPIRAM);
+    envRef = (float*)heap_caps_malloc(kEnv * sizeof(float), MALLOC_CAP_SPIRAM);
+    return mic && ref && out && line && envMic && envRef;
+  }
+};
+Canceller s_cancel;
+bool s_cancelOk = false;
+std::atomic<int> s_echoDelay{960};     // samples the reference is held back: 60 ms (measured 60-70 ms on the puck)
+
+// The lag (in 10 ms blocks) at which the mics' loudness best follows what was played
+int bestLag(const float* mic, const float* ref, int n, float* score) {
+  int best = 0;
+  float bestC = -2;
+  for (int lag = 0; lag <= 30 && lag < n - 50; lag++) {
+    double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    int m = n - lag;
+    for (int i = 0; i < m; i++) {
+      double x = log1p(ref[i]), y = log1p(mic[i + lag]);
+      sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+    }
+    double cov = sxy / m - (sx / m) * (sy / m);
+    double vx = sxx / m - (sx / m) * (sx / m), vy = syy / m - (sy / m) * (sy / m);
+    float c = (vx > 0 && vy > 0) ? (float)(cov / sqrt(vx * vy)) : 0;
+    if (c > bestC) {
+      bestC = c;
+      best = lag;
+    }
+  }
+  if (score) *score = bestC;
+  return best;
+}
+
 void audioTask(void*) {
   ToneVoice tone;
   bool ampOn = false;
@@ -222,24 +294,23 @@ void audioTask(void*) {
   int playingId = -1;
   float hpX = 0, hpY = 0;         // DC blocker on the mic
   float micEnv = 0, spkEnv = 0;
-  // Talking over the puck: the speaker's own sound reaches the mics. How much of it (the echo
-  // path, learned while it speaks) and the room's noise (learned in its pauses) set how loud the
-  // mics must be before it's someone talking.
+  // Talking over the puck (see Canceller): what's left after the echo is taken out is compared
+  // with the echo that's left over (learned from its peaks while it speaks) and with the room's
+  // noise (learned in its pauses).
   bool armed = false;
-  // What the speaker played, block by block: its sound reaches the mics ~0.1 s later (the I2S
-  // buffers, the room), so the echo is compared with the loudest of the last quarter second
-  constexpr int kRefBlocks = 25;
-  float refHist[kRefBlocks] = {};
+  constexpr int kRefChunks = 6;          // ~100 ms: what was just played, for the echo left over
+  float refHist[kRefChunks] = {};
   int refIdx = 0;
-  float refEnv = 0;          // that loudest, held a little longer (the room's reverb)
-  float coupling = -1;       // mic RMS per unit of speaker RMS: the echo's peaks
-  float secM = 0, secRef = 0, secQ = 0, secRatio = 0;  // this second's highs (logged)
-  int secBlocks = 0;
-  float noise = 150;         // mic RMS while the speaker is quiet
-  int learned = 0, hot = 0;  // blocks of echo learned; blocks of "someone's talking" (leaky)
-  float peak = 0;            // the closest it came to setting off, this reply (logged)
-  uint32_t blocks = 0;
+  float residual = -1;                   // what's left of the echo, per unit of what was played
+  float noise = 100;
+  int learned = 0, hot = 0, chunks = 0;
+  float peak = 0;
+  float secRaw = 0, secOut = 0, secRef = 0, secRatio = 0;
+  double sumRaw = 0, sumOut = 0;         // while it speaks: how much echo the canceller takes out
+  double winRaw = 0, winOut = 0;         // the same over about the last second
+  int secChunks = 0;
   float micRms = 0;
+  int16_t refBlock[kBlock];
 
   for (;;) {
     // ---- in: 10 ms from the mics (this read paces the whole loop)
@@ -251,28 +322,39 @@ void audioTask(void*) {
     int frames = (int)(got / (2 * sizeof(int16_t)));
     s_rounds++;
 
-    if (s_micGainApplied.load() != s_micGainDb.load()) {
-      int g = s_micGainDb.load();
-      es7210SetGain(g);
-      s_micGainApplied = g;
+    const int gainWanted = std::max(0, s_micGainDb.load() - (armed ? 9 : 0));
+    if (s_micGainApplied.load() != gainWanted) {
+      es7210SetGain(gainWanted);
+      s_micGainApplied = gainWanted;
     }
 
-    bool armNow = s_bargeArmed.load() && s_micOk;
+    bool armNow = s_bargeArmed.load() && s_micOk && s_cancelOk;
     if (armNow != armed) {
       if (armNow) {
-        refEnv = 0;
         for (float& r : refHist) r = 0;
-        coupling = -1;
-        secM = secRef = secQ = secRatio = 0;
-        secBlocks = 0;
-        learned = hot = 0;
+        residual = -1;
+        learned = hot = chunks = 0;
         peak = 0;
-        blocks = 0;
+        sumRaw = sumOut = 0;
+        winRaw = winOut = 0;
+        secRaw = secOut = secRef = secRatio = 0;
+        secChunks = 0;
+        s_cancel.fill = 0;
+        s_cancel.envN = 0;
         s_recentPos = 0;
         s_recentFull = false;
-      } else if (blocks > 50) {
-        hal::logLine("[barge] reply over: %lu blocks, closest %.2f of the way, echo %.3f, noise %.0f", (unsigned long)blocks,
-                     (double)peak, (double)coupling, (double)noise);
+      } else if (chunks > 60) {
+        float score = 0;
+        int lag = bestLag(s_cancel.envMic, s_cancel.envRef, s_cancel.envN, &score);
+        hal::logLine("[barge] reply over: %d chunks, closest %.2f of the way, echo removed %.1f dB, left %.3f, noise %.0f; "
+                     "echo arrives %d ms after it's played (fit %.2f)",
+                     chunks, (double)peak, sumOut > 0 ? 10.0 * log10(sumRaw / sumOut) : 0.0, (double)residual, (double)noise,
+                     lag * 10, (double)score);
+        // Line the reference up with it (a block early: the canceller's filter covers the rest).
+        // Only for a real change: it measures 60 or 70 ms by turns, and each move makes the
+        // canceller learn the echo again.
+        const int want = std::min((lag - 1) * kBlock, Canceller::kDelayCap - kBlock);
+        if (score > 0.5f && lag > 0 && abs(want - s_echoDelay.load()) >= 2 * kBlock) s_echoDelay = want;
       }
       armed = armNow;
     }
@@ -291,11 +373,6 @@ void audioTask(void*) {
         sumSq += y * y;
       }
       if (s_micOn.load()) s_mic.write(s_mono, frames);
-      if (armed && s_recent) {
-        for (int i = 0; i < frames; i++) s_recent[(s_recentPos + i) % kRecent] = s_mono[i];
-        s_recentPos = (s_recentPos + frames) % kRecent;
-        if (s_recentPos < (size_t)frames) s_recentFull = true;
-      }
       float rms = sqrtf(sumSq / frames);
       micRms = rms;
       float lvl = log10f(1.0f + rms) / 4.0f;  // ~0 (silence) .. ~1 (shouting)
@@ -384,48 +461,96 @@ void audioTask(void*) {
     s_spkLevel = spkEnv;
 
     if (armed) {
-      blocks++;
-      refHist[refIdx] = sqrtf(sumSq / frames);
-      refIdx = (refIdx + 1) % kRefBlocks;
-      float refMax = 0;
-      for (float r : refHist) refMax = r > refMax ? r : refMax;
-      refEnv = refMax > refEnv ? refMax : refEnv * 0.85f;  // a room's reverb fades ~1.5 dB per 10 ms
-      const float m = micRms;
-      if (refEnv > 150) {
-        // The speaker's sound: learn the most of it that comes back (the peaks, so a loud
-        // syllable isn't taken for someone talking). Up quickly, down slowly; not from moments
-        // far above it, which are someone talking.
-        const float q = m / refEnv;
-        if (coupling < 0) coupling = q;
-        else if (learned < 50 || q < coupling * 2.0f) coupling = q > coupling ? coupling + (q - coupling) * 0.25f : coupling * 0.9995f;
-        if (q > secQ) secQ = q;
-        learned++;
-      } else {
-        noise = m < noise ? noise * 0.9f + m * 0.1f : noise * 0.995f + m * 0.005f;
+      Canceller& c = s_cancel;
+      // What was played this block, into the delay line
+      for (int i = 0; i < frames; i++) {
+        c.line[c.pos] = s_tx[2 * i];
+        c.pos = (c.pos + 1) % Canceller::kDelayCap;
       }
-      const float echo = coupling > 0 ? coupling * refEnv : 0;
-      const float need = std::max(echo * 2.0f, noise * 3.0f) + 300.0f;
-      const float ratio = m / need;
-      if (m > secM) secM = m;
-      if (refEnv > secRef) secRef = refEnv;
-      if (learned >= 50 && ratio > secRatio) secRatio = ratio;
-      if (++secBlocks >= 100) {
-        hal::logLine("[barge] 1s: mic %.0f, speaker %.0f, echo/speaker %.3f (learned %.3f), closest %.2f", (double)secM,
-                     (double)secRef, (double)secQ, (double)coupling, (double)secRatio);
-        secM = secRef = secQ = secRatio = 0;
-        secBlocks = 0;
+      // For measuring the delay: loudness of the mics and of what was played, per block
+      if (c.envN < Canceller::kEnv) {
+        c.envMic[c.envN] = micRms;
+        c.envRef[c.envN] = sqrtf(sumSq / frames);
+        c.envN++;
       }
-      // Half a second of its own speech first (to know its echo); then about a quarter second of
-      // mostly-loud sound is someone talking
-      const bool loud = learned >= 50 && ratio > 1.0f;
-      hot = loud ? hot + 1 : (hot >= 2 ? hot - 2 : 0);
-      if (learned >= 50 && ratio > peak) peak = ratio;
-      if (hot >= 24) {
-        hal::logLine("[barge] someone's talking: mic %.0f, echo %.0f, noise %.0f", (double)m, (double)echo, (double)noise);
-        s_bargeCount++;
-        s_bargeHeard = true;
-        s_bargeArmed = false;
-        armed = false;
+      // The same block of mics, with what was played `delay` samples ago
+      const int delay = s_echoDelay.load();
+      for (int i = 0; i < frames; i++) {
+        int at = c.pos - frames - delay + i;
+        while (at < 0) at += Canceller::kDelayCap;
+        refBlock[i] = c.line[at % Canceller::kDelayCap];
+      }
+      for (int i = 0; i < frames; i++) {
+        c.mic[c.fill] = s_mono[i];
+        c.ref[c.fill] = refBlock[i];
+        if (++c.fill < c.chunk) continue;
+        c.fill = 0;
+        aec_process(c.aec, c.mic, c.ref, c.out);
+        chunks++;
+
+        // The cancelled audio is what's kept from before it noticed someone (sent as their first words)
+        if (s_recent) {
+          for (int k = 0; k < c.chunk; k++) s_recent[(s_recentPos + k) % kRecent] = c.out[k];
+          s_recentPos = (s_recentPos + c.chunk) % kRecent;
+          if (s_recentPos < (size_t)c.chunk) s_recentFull = true;
+        }
+
+        double rr = 0, ro = 0, rf = 0;
+        for (int k = 0; k < c.chunk; k++) {
+          rr += (double)c.mic[k] * c.mic[k];
+          ro += (double)c.out[k] * c.out[k];
+          rf += (double)c.ref[k] * c.ref[k];
+        }
+        const float raw = sqrtf(rr / c.chunk), left = sqrtf(ro / c.chunk), played = sqrtf(rf / c.chunk);
+        refHist[refIdx] = played;
+        refIdx = (refIdx + 1) % kRefChunks;
+        float refMax = 0;
+        for (float r : refHist) refMax = r > refMax ? r : refMax;
+        if (refMax > 150) {
+          // It's speaking: learn the most of its echo that gets through the canceller (not from
+          // moments far above it, which are someone talking)
+          const float q = left / refMax;
+          if (residual < 0) residual = q;
+          // (its first moments, while the canceller settles, fade from it within a couple of seconds)
+          else if (learned < 30 || q < residual * 2.0f) residual = q > residual ? residual + (q - residual) * 0.25f : residual * 0.995f;
+          learned++;
+          sumRaw += rr;
+          sumOut += ro;
+          winRaw = winRaw * 0.95 + rr;
+          winOut = winOut * 0.95 + ro;
+        } else {
+          noise = left < noise ? noise * 0.9f + left * 0.1f : noise * 0.995f + left * 0.005f;
+        }
+        const float echoLeft = residual > 0 ? residual * refMax : 0;
+        const float need = std::max(echoLeft * 2.5f, noise * 3.0f) + 80.0f;
+        const float ratio = left / need;
+        // A second or so of its speech first (to know what's left of its echo); then about a
+        // quarter second of mostly-loud sound is someone talking
+        // ...and only while the canceller is doing its job (10 dB or more of its voice taken out
+        // lately): settling after a restart, or out of line, its leftovers would look like someone
+        const bool working = winOut > 0 && winRaw > winOut * 10.0;
+        const bool loud = learned >= 30 && working && ratio > 1.0f;
+        hot = loud ? hot + 1 : (hot >= 2 ? hot - 2 : 0);
+        if (learned >= 30 && working && ratio > peak) peak = ratio;
+        if (raw > secRaw) secRaw = raw;
+        if (left > secOut) secOut = left;
+        if (played > secRef) secRef = played;
+        if (learned >= 30 && working && ratio > secRatio) secRatio = ratio;
+        if (++secChunks >= 62) {
+          hal::logLine("[barge] 1s: mics %.0f, after the canceller %.0f, played %.0f, closest %.2f", (double)secRaw,
+                       (double)secOut, (double)secRef, (double)secRatio);
+          secRaw = secOut = secRef = secRatio = 0;
+          secChunks = 0;
+        }
+        if (hot >= 15) {
+          hal::logLine("[barge] someone's talking: %.0f left after the canceller, echo left %.0f, noise %.0f", (double)left,
+                       (double)echoLeft, (double)noise);
+          s_bargeCount++;
+          s_bargeHeard = true;
+          s_bargeArmed = false;
+          armed = false;
+          break;
+        }
       }
     }
 
@@ -438,9 +563,11 @@ void audioTask(void*) {
 
 bool audioOk() { return s_ok; }
 
+TaskHandle_t s_audioTask = nullptr;
+
 int audioDiag(char* buf, size_t len) {
-  return snprintf(buf, len, "barge:%lu audio:%d mic:%d micOn:%d lvl:%.2f spk:%d q:%u under:%u rounds:%u",
-                  (unsigned long)s_bargeCount.load(),
+  return snprintf(buf, len, "astack:%u barge:%lu audio:%d mic:%d micOn:%d lvl:%.2f spk:%d q:%u under:%u rounds:%u",
+                  s_audioTask ? (unsigned)uxTaskGetStackHighWaterMark(s_audioTask) : 0u, (unsigned long)s_bargeCount.load(),
                   (int)s_ok, (int)s_micOk, (int)s_micOn.load(), (double)s_micLevel.load(), s_spkId.load(),
                   (unsigned)s_spk.available(), (unsigned)s_underruns, (unsigned)s_rounds);
 }
@@ -486,12 +613,16 @@ bool audioBegin() {
     return false;
   }
   s_micOk = es7210Begin(s_micGainDb.load());
+  const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  s_cancelOk = s_micOk && s_cancel.begin();
+  hal::logLine("[hal] echo canceller: %s (internal RAM %u -> %u)", s_cancelOk ? aec_get_config_string(s_cancel.aec) : "not available",
+               (unsigned)freeBefore, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
   s_micGainApplied = s_micGainDb.load();
   if (!s_micOk) hal::logLine("[hal] mic: not available; the puck can't listen");
 
   s_tones = xQueueCreate(8, sizeof(Tone));
   // Core 0 with the input task; priority above it so speech never stutters behind a touch burst
-  xTaskCreatePinnedToCore(audioTask, "audio", 6144, nullptr, 6, nullptr, 0);
+  xTaskCreatePinnedToCore(audioTask, "audio", 8192, nullptr, 6, &s_audioTask, 0);  // the echo canceller uses ~3 KB of it
   s_ok = true;
   return true;
 }

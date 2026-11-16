@@ -197,6 +197,13 @@ void handleInput(const InputEvent& e) {
     overlay::powerInput(e);
     return;
   }
+  // Holding the button is power off, and that comes before everything else: the picker, a
+  // question from the hub, whatever face is up, a reply being heard or spoken
+  if (e.type == Ev::ButtonLong) {
+    s_liftTalking = false;
+    overlay::powerConfirm();
+    return;
+  }
   if (picker::isOpen()) {
     picker::input(e);
     return;
@@ -219,13 +226,9 @@ void handleInput(const InputEvent& e) {
   }
 
   // Picking the puck up to reach the side button isn't someone starting to talk: drop that listen
-  if ((e.type == Ev::Button || e.type == Ev::ButtonLong) && s_liftTalking && g_model.ai == AiState::Listening) {
+  if (e.type == Ev::Button && s_liftTalking && g_model.ai == AiState::Listening) {
     s_liftTalking = false;
     hub::talk("cancel");
-  }
-  if (e.type == Ev::ButtonLong) {
-    overlay::powerConfirm();
-    return;
   }
   // The side button: the picker everywhere (confirm ignores it so it can't be taken for an answer)
   if (e.type == Ev::Button && s_cur != F_CONFIRM) {
@@ -254,7 +257,8 @@ void update(uint32_t dirty) {
   }
   if ((dirty & D_LISTEN) && g_model.listenRequest) {
     g_model.listenRequest = false;
-    if (model_can_talk() && s_cur != F_CONFIRM && g_model.ai != AiState::Listening) startTalking("hub");
+    if (model_can_talk() && s_cur != F_CONFIRM && !overlay::powerOpen() && g_model.ai != AiState::Listening)
+      startTalking("hub");
   }
   if (dirty & D_AI) {
     // the assistant is talking to someone: make sure they can see it

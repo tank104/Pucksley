@@ -1,11 +1,13 @@
 // The picker: the side button brings it up over any face. Turn through the faces (one every 24°,
-// stopping at the ends), tap or press the button to open one, hold to back out.
+// stopping at the ends) or drag a finger across them, tap or press the button to open one, hold
+// to back out.
 #include "ui_common.h"
 
 namespace ui {
 namespace picker {
 
 static constexpr float STEP_DEG = 24.0f;
+static constexpr int STEP_PX = 70;  // a finger dragged this far moves one face
 
 static lv_obj_t* s_box;
 static lv_obj_t* s_dots;
@@ -18,6 +20,7 @@ static int s_sel = 0;
 static bool s_open = false;
 static uint32_t s_lastInput = 0;
 static Detents s_det;
+static int16_t s_dragX = 0, s_dragY = 0;  // where the finger was when it last moved the choice
 
 // glyph parts that need to outlive the call that drew them
 static Spark s_spark;
@@ -33,7 +36,7 @@ void create() {
   at(s_glyph, CX, CY - 26);
   s_name = label(s_box, &nunito_40, COL_WHITE, "");
   at(s_name, CX, 326);
-  s_hint = hintLabel(s_box, "Tap: open \xC2\xB7 Hold: back", 380);
+  s_hint = hintLabel(s_box, "Turn or swipe \xC2\xB7 Tap: open", 380);
   hide(s_box, true);
 }
 
@@ -93,22 +96,39 @@ void close() {
   restoreInputMode();
 }
 
+// Moves the choice by n, stopping at the ends; false if it was already there
+static bool step(int n) {
+  int sel = s_sel + n;
+  if (sel < 0) sel = 0;
+  if (sel > s_n - 1) sel = s_n - 1;
+  if (sel == s_sel) return false;
+  s_sel = sel;
+  hal::beep(Tone::Tick);
+  render(n);
+  return true;
+}
+
 void input(const InputEvent& e) {
   s_lastInput = lv_tick_get();
   switch (e.type) {
     case Ev::Turn: {
       int n = s_det.feed(e.value, STEP_DEG);
-      if (!n) break;
-      int sel = s_sel + n;
-      if (sel < 0) sel = 0;
-      if (sel > s_n - 1) sel = s_n - 1;
-      if (sel == s_sel) {
-        s_det.reset();  // at an end: it stops, it doesn't wind up
-        break;
-      }
-      s_sel = sel;
-      hal::beep(Tone::Tick);
-      render(n);
+      if (n && !step(n)) s_det.reset();  // at an end: it stops, it doesn't wind up
+      break;
+    }
+    case Ev::TouchDown:
+      s_dragX = e.x;
+      s_dragY = e.y;
+      break;
+    case Ev::TouchMove: {
+      // A finger dragged across: left or up is the next face, right or down the one before
+      // (whichever way it moved most). A drag never counts as a tap, so nothing opens.
+      const int dx = e.x - s_dragX, dy = e.y - s_dragY;
+      const int d = abs(dx) >= abs(dy) ? -dx : -dy;
+      if (abs(d) < STEP_PX) break;
+      step(d > 0 ? 1 : -1);
+      s_dragX = e.x;
+      s_dragY = e.y;
       break;
     }
     case Ev::Tap:
@@ -120,8 +140,7 @@ void input(const InputEvent& e) {
       pickerChose(f);
       break;
     }
-    case Ev::LongPress:
-    case Ev::ButtonLong:
+    case Ev::LongPress:  // (holding the button is power off: ui.cpp sends that there first)
       close();
       break;
     default:

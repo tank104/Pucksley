@@ -1,5 +1,6 @@
 // Things that sit over every face: the notification banner and the power-off question.
 #include "ui_common.h"
+#include "../face_video.h"
 
 namespace ui {
 namespace overlay {
@@ -79,6 +80,7 @@ void banner(const char* text, bool accent) {
   lv_obj_update_layout(s_banner);
   at(s_banner, CX, BANNER_Y);
   lv_obj_move_foreground(s_banner);
+  if (s_powerOpen) lv_obj_move_foreground(s_power);  // nothing covers the power-off question
   hide(s_banner, false);
   if (!s_bannerUp) slide(-180, 0, 300, lv_anim_path_ease_out, false);
   s_bannerUp = true;
@@ -87,13 +89,18 @@ void banner(const char* text, bool accent) {
 
 void powerConfirm() {
   if (s_powerOpen) return;
+  // The power button comes before everything: the picker closes, and whatever the puck was
+  // hearing or saying (the talking face too) stops
   picker::close();
+  if (g_model.ai != AiState::Idle) hub::talk("cancel");
   // On USB the PMU stays on whatever we do: just say how
   if (hal::usbPowered()) {
+    face_video::stop();
     banner("Unplug USB, then hold the button to power off", false);
     hal::beep(Tone::Select);
     return;
   }
+  face_video::holdOff(true);
   s_powerOpen = true;
   s_powerAt = lv_tick_get();
   s_holdFrom = 0;
@@ -106,6 +113,7 @@ void powerConfirm() {
 
 static void powerClose() {
   s_powerOpen = false;
+  face_video::holdOff(false);
   s_holdFrom = 0;
   fadeOut(s_power, 150);
   restoreInputMode();
@@ -131,11 +139,13 @@ void powerInput(const InputEvent& e) {
       break;
     case Ev::Button:
     case Ev::ButtonLong:
-      // The button again: that's a yes
-      arcSpan(s_holdRing, 0, 360);
+      // The button again: that's a yes. The screen goes dark at once, so it's plain it was heard
+      // (the power itself takes a moment to go).
       hal::beep(Tone::Select);
+      hal::setDisplayOn(false);
       hal::powerOff();
-      powerClose();  // if we're still here, the PMU said no
+      hal::setDisplayOn(true);  // if we're still here, the PMU said no
+      powerClose();
       break;
     case Ev::Tap:
       powerClose();

@@ -22,8 +22,9 @@ bool s_swallowed = false;     // pressed while the display was off: that press o
 }  // namespace
 
 void buttonEvent(bool longPress) {
-  // The PMU reports a finished press, so there's no "rest of the gesture" to swallow.
-  if (!activityBegin(Src::Button)) return;
+  // The PMU reports a finished press, so there's no "rest of the gesture" to swallow. A short
+  // press on a dark screen only wakes it; a long one is power off, which always goes through.
+  if (!activityBegin(Src::Button) && !longPress) return;
   post(longPress ? Ev::ButtonLong : Ev::Button);
 }
 
@@ -46,7 +47,8 @@ void buttonsPoll(uint32_t now) {
       post(Ev::Button);
     }
   }
-  if (s_down && !s_swallowed && !s_longFired && now - s_pressedAt >= kLongMs) {
+  // Held long it's power off, even if the press began on a dark screen
+  if (s_down && !s_longFired && now - s_pressedAt >= kLongMs) {
     s_longFired = true;
     activityContinue();
     post(Ev::ButtonLong);

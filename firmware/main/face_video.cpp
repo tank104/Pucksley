@@ -36,7 +36,7 @@ constexpr int64_t kIdleUs = 1500000;       // no frames and nothing playing for 
 
 enum State : int { Idle, WantScreen, HaveScreen, Done };
 std::atomic<int> s_state{Idle};
-std::atomic<bool> s_stop{false}, s_ending{false};
+std::atomic<bool> s_stop{false}, s_ending{false}, s_heldOff{false};
 
 struct Slot {
   uint8_t* data;
@@ -235,7 +235,7 @@ void begin() {
 
 bool frameStart(size_t total) {
   s_filling = -1;
-  if (!s_free || total < 16 || total > kSlotBytes) return false;
+  if (!s_free || s_heldOff.load() || total < 16 || total > kSlotBytes) return false;
   int i;
   // No free slot: the oldest waiting frame is the one to lose
   if (xQueueReceive(s_free, &i, 0) != pdTRUE && xQueueReceive(s_ready, &i, 0) != pdTRUE) return false;
@@ -265,6 +265,11 @@ void frameData(const uint8_t* data, size_t len) {
 void end() { s_ending = true; }
 
 void stop() { s_stop = true; }
+
+void holdOff(bool on) {
+  s_heldOff = on;
+  if (on) s_stop = true;
+}
 
 bool screenTaken() {
   switch (s_state.load()) {
