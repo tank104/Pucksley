@@ -74,7 +74,7 @@ public sealed class FakeSonos
 
     public Player this[string room] => Players.Single(p => p.Room == room);
 
-    /// <summary>A household like the real one: Kitchen (Amp, TV), Loft Study (One), Sonos Move.</summary>
+    /// <summary>A household of three rooms: Kitchen (Amp, TV), Loft Study (One), Sonos Move.</summary>
     public static FakeSonos Household()
     {
         var s = new FakeSonos();

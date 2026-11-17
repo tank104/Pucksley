@@ -210,8 +210,8 @@ cd firmware/tools/test; ./run.sh        # desktop tests for the firmware's plain
   Claude API and fake pucks end to end, direct mode setup, and tool sharing over real MCP) and every
   plugin project.
 - The Docker image builds and runs on Linux x86-64 (local Whisper included).
-- Run read-only against your real devices: Sonos discovery and state (Kitchen, Loft Study, Sonos
-  Move), Shelly and Samsung discovery, Windows audio and now-playing.
+- Run read-only against real devices: Sonos discovery and state (three rooms: an Amp with a TV, a
+  One and a Move), Shelly and Samsung discovery, Windows audio and now-playing.
 - Local Whisper transcribes a test clip in about half a second on this PC. Windows text-to-speech
   round-trips through speech recognition.
 
