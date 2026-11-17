@@ -6,6 +6,9 @@
     <Version>1.0.0</Version>
     <Company>Pucksley</Company>
     <Product>Pucksley Hub</Product>
+    <Copyright>Copyright (c) 2026 Andrew Thomas</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/tank104/Pucksley</RepositoryUrl>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <!-- CA1416: platform checks are done by project split (Windows-only code lives in Pucksley.Windows) -->

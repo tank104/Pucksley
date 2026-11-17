@@ -251,3 +251,10 @@ The puck reports which chips answered at boot to the hub's log (**Activity** pag
 - [LVGL](https://lvgl.io), [SensorLib and XPowersLib](https://github.com/lewisxhe) (MIT), [ArduinoJson](https://arduinojson.org), and Espressif's es7210/es8311 register sequences (Apache-2.0).
 - The [Anthropic C# SDK](https://github.com/anthropics/anthropic-sdk-csharp), [Whisper.net](https://github.com/sandrohanea/whisper.net), [NAudio](https://github.com/naudio/NAudio), and the [ModelContextProtocol C# SDK](https://github.com/modelcontextprotocol/csharp-sdk).
 - The [Nunito](https://github.com/googlefonts/nunito) typeface (SIL Open Font License).
+- Espressif's [ESP-SR](https://github.com/espressif/esp-sr) echo canceller, fetched at build time
+  (its own licence allows use on Espressif chips only).
+
+## Licence
+
+Pucksley is under the [MIT License](LICENSE): use it, change it, build and sell pucks with it;
+just keep the copyright notice. The libraries it uses keep their own licences (see Credits).
