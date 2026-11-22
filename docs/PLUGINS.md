@@ -14,7 +14,8 @@ There are three ways to add abilities, from least to most work:
    command to run, or an HTTP URL). Its tools appear to Claude as `mcp_<server>_<tool>`.
 3. **A C# plugin.** A class deriving from `PuckPlugin<TSettings>`, either built in (in
    `hub/src/Plugins/*`) or compiled into a DLL and dropped into the hub's `plugins` folder
-   (`%AppData%\Pucksley\plugins` on Windows, `/data/plugins` in Docker). Reference only `Pucksley.Sdk`.
+   (`%AppData%\Pucksley\plugins` on Windows, `~/.config/pucksley/plugins` on Linux, `/data/plugins`
+   in Docker). Reference only `Pucksley.Sdk`.
 
 ## A whole plugin
 

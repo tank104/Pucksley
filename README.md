@@ -4,10 +4,10 @@ A voice assistant you can hold: the round **Waveshare ESP32-S3-Touch-AMOLED-1.75
 its own microphones, answers out loud on its own speaker, and shows the conversation on its round
 screen. Behind it, the **Pucksley hub** runs Claude with tools, so the same conversation can answer
 questions, search the web, and run the house: Sonos rooms and Spotify, the TV, smart plugs, Home
-Assistant, the underfloor heating, timers and reminders, and the Windows PC.
+Assistant, the underfloor heating, timers and reminders, and the PC it runs on (Windows or Linux).
 
 The puck needs no PC. It joins your Wi‑Fi and finds the hub on the network. The hub runs around the
-clock in Docker on the NAS (or as a tray app on the PC). When no hub is reachable at all, the puck
+clock in Docker on the NAS (or as a tray app on the PC, Windows or Linux). When no hub is reachable at all, the puck
 still answers questions: it calls Claude and a cloud speech service itself (**direct mode**). The
 PC app can lend the NAS hub just this PC's controls.
 
@@ -17,7 +17,7 @@ PC app can lend the NAS hub just this PC's controls.
  │ speaker ◀── streamed speech                  │ ◀─────────────────── │ Claude (tools, web search) → text-to-speech     │
  │ round screen: assistant · home · controls ·  │   or USB (setup)     │ plugins: Sonos · Spotify · TV · plugs · HA ·    │
  │ timer · status · confirm · setup             │                      │ heating · weather · timers · memory · MCP ·     │
- │ dial · touch · lift-to-talk                  │                      │ custom actions · this PC (Windows)              │
+ │ dial · touch · lift-to-talk                  │                      │ custom actions · this PC (Windows, Linux)       │
  └──────────────────────────────────────────────┘                      │ web page: setup, plugins, chat, voice test      │
                                                                         └──────────────────────────────────────────────────┘
 ```
@@ -66,10 +66,17 @@ direct mode if the NAS is off), and **the PC app** sharing only the PC's control
 
 ### 1. Run the hub
 
-On the PC: `dotnet run --project hub/src/Hosts/Pucksley.Tray`, or build it with `./scripts/build.ps1`
+On a Windows PC: `dotnet run --project hub/src/Hosts/Pucksley.Tray`, or build it with `./scripts/build.ps1`
 and run `dist/Pucksley/Pucksley.exe`. A tray icon appears and the hub's page opens at
 <http://127.0.0.1:8765>. (From another computer, use the link with `?key=` that the tray menu and
 the log show.)
+
+On a Linux PC: `./scripts/build.sh --hub-only` and run `dist/pucksley/pucksley` (nothing else to
+install: it brings its own .NET), or `dotnet run --project hub/src/Hosts/Pucksley.Linux`. The same
+tray icon appears wherever the desktop has a tray (KDE, Hyprland and Omarchy, Sway bars, GNOME with
+the AppIndicator extension), and the page opens at the same address. `pucksley --install` puts it in
+the app launcher and the tray menu's *Start at login* starts it with the desktop. What it needs from
+the desktop, and what works on which one, is in [docs/LINUX.md](docs/LINUX.md).
 
 In the page:
 
@@ -83,7 +90,8 @@ In the page:
     (142 MB) on first use, but it's slow on a NAS's CPU. **Deepgram** is fast and accurate on short
     commands; list names it might mishear (rooms, people, places) under *Names to listen for*.
     OpenAI (or Groq through it), Azure and ElevenLabs are there too.
-  - *Voice*: **Windows voices** work immediately, but OpenAI, ElevenLabs and **Azure** sound far better.
+  - *Voice*: **Windows voices** work immediately (on Linux, **eSpeak NG** does, if it's installed: a
+    robot's voice), but OpenAI, ElevenLabs and **Azure** sound far better.
     Azure also has New Zealand voices (`en-NZ-MollyNeural`, `en-NZ-MitchellNeural`).
   - Use **Talk** in the page to try the whole loop with your browser's microphone before the puck is
     set up.
@@ -97,6 +105,9 @@ cd firmware
 idf.py set-target esp32s3        # once
 idf.py -p COM5 flash             # replace COM5; hold BOOT while plugging in if it won't enter download mode
 ```
+
+On Linux the port is `/dev/ttyACM0` (`idf.py -p /dev/ttyACM0 flash`), and your user needs to be in
+the group that owns it (`uucp` on Arch and Omarchy, `dialout` on Debian, Ubuntu and Fedora).
 
 To keep a copy of what's on the board first (all 16 MB):
 `python -m esptool --chip esp32s3 --port COM5 read_flash 0 0x1000000 board-backup.bin`.
@@ -130,8 +141,8 @@ then means the kitchen speaker.
 | **Memory & lists** | – | "Remember that…" (always in Claude's context), plus shopping and to-do lists. |
 | **Custom actions** | Define them on the plugin's card | No-code tools: call a URL (webhooks, Node-RED, IFTTT…) or run a script, with parameters. |
 | **MCP servers** | Add a command or URL | Any Model Context Protocol server's tools become Claude's tools. |
-| **This PC** / **PC audio** (Windows hub only) | – | Volume, media keys, now playing, audio outputs, per-app volume, open apps and files, lock/sleep/shutdown (asks first), screenshot ("what's on my screen?"), clipboard, typing, dark mode. |
-| **Speech engines** | API keys on their cards | Deepgram (hearing), Azure, OpenAI (and compatible: Groq, local Speaches/Kokoro), ElevenLabs, local Whisper, Piper, Windows. |
+| **This PC** / **PC audio** (the Windows and Linux desktop apps) | – | Volume, media keys, now playing, audio outputs, per-app volume, open apps and files, lock/sleep/shutdown (asks first), screenshot ("what's on my screen?"), clipboard, typing, dark mode. The same tools on both; on Linux some need a small program installed ([docs/LINUX.md](docs/LINUX.md)). |
+| **Speech engines** | API keys on their cards | Deepgram (hearing), Azure, OpenAI (and compatible: Groq, local Speaches/Kokoro), ElevenLabs, local Whisper, Piper, Windows' voices, eSpeak NG on Linux. |
 | **Talking face (Openspline)** | [Openspline](https://docs.openspline.dev/get-started/self-host) on a PC with an NVIDIA GPU | While Pucksley speaks, the puck shows a face animated live to the voice (about 24 frames a second, over Wi-Fi). Pick one of 20 faces on the plugin's page, or give it your own picture (front-on, looking at the camera, black background). A start command lets the hub run Openspline itself. Without it the puck keeps its usual face. |
 
 Writing your own: see [docs/PLUGINS.md](docs/PLUGINS.md). A plugin is a C# class whose methods carry `[Tool]`
@@ -146,18 +157,20 @@ docker compose -f hub/docker-compose.yml up -d --build
 
 Host networking is required (mDNS, Sonos discovery). Settings live in `hub/pucksley-data/`. On a
 Synology with an Intel/AMD CPU (the "plus" models) the image runs as is: in Container Manager, create
-a project from `hub/docker-compose.yml`. The container has everything except the Windows plugins.
+a project from `hub/docker-compose.yml`. The container has everything except the plugins that
+control a PC (they need the desktop app, on the PC itself).
 
 ### The PC's controls, with the hub on the NAS
 
-1. On the PC, run the tray app. In its page (**Household → More than one hub**): turn off **Pucks
+1. On the PC, run the tray app (Windows or Linux). In its page (**Household → More than one hub**): turn off **Pucks
    connect to this hub**, turn on **Share this hub's tools**, and list `pc-audio` and `pc` under
    **Only these plugins**. Turn off the plugins you don't need on the PC (Sonos and the rest run on
    the NAS). The page then shows an address (`http://<PC>:8765/mcp`) and a key line.
 2. On the NAS hub's page: **Plugins → MCP servers → add a server**: name `pc`, transport `http`,
    that address, and the key line under **Headers**.
-3. Allow the tray app through Windows Firewall when Windows asks (private networks). Give the PC a
-   fixed address in the router so the link keeps working.
+3. Allow the tray app through Windows Firewall when Windows asks (private networks); on Linux, open
+   port 8765 if a firewall is on (`sudo ufw allow 8765/tcp`). Give the PC a fixed address in the
+   router so the link keeps working.
 
 Claude on the NAS hub then sees the PC's tools (as `mcp_pc_…`); anything drastic, like shutting the
 PC down, is still confirmed on the puck.
@@ -182,11 +195,12 @@ only run on the hub.
 | `docs/PROTOCOL.md` | The puck ⇄ hub protocol (JSON over WebSocket or USB serial, plus 16 kHz audio) |
 | `docs/PLUGINS.md` | How to write plugins |
 | `docs/ARCHITECTURE.md` | How the pieces work inside |
+| `docs/LINUX.md` | The Linux desktop app: what it needs, what works on which desktop, how it shares code with Windows |
 | `firmware/` | ESP-IDF project. `main/hal` = board (display, touch, motion, power, the ES8311 speaker codec and ES7210 mic ADC); `main/hub` = Wi-Fi, mDNS, WebSocket, USB, setup portal, protocol; `main/ui` = the faces; `components/` = vendored SensorLib and XPowersLib; `tools/sim` = desktop renderer of the faces |
 | `hub/src/Pucksley.Sdk` | The plugin SDK |
 | `hub/src/Pucksley.Core` | The hub: pucks, voice pipeline, Claude agent, plugin host, web API and page |
-| `hub/src/Plugins/*` | Built-in plugins (Music, Home, Utility, Speech, Windows) |
-| `hub/src/Hosts` | `Pucksley.Tray` (Windows tray app) and `Pucksley.Server` (console / Docker) |
+| `hub/src/Plugins/*` | Built-in plugins (Music, Home, Utility, Speech), and the ones that control the PC: `Pc` is what Windows and Linux share (the tools Claude sees, name matching, the rules), `Windows` and `Linux` are each system's own half |
+| `hub/src/Hosts` | `Pucksley.Tray` (Windows tray app), `Pucksley.Linux` (Linux desktop app) and `Pucksley.Server` (console / Docker) |
 | `hub/tests` | Tests for each plugin project and the core |
 
 ## Building and testing
@@ -199,6 +213,13 @@ cd firmware/tools/sim; ./build.sh; ./build/sim.exe   # renders every face to too
 cd firmware/tools/test; ./run.sh        # desktop tests for the firmware's plain logic
 ```
 
+On Linux, `./scripts/build.sh` does the same (`dist/pucksley` + `dist/firmware`; `--hub-only`,
+`--firmware-only`, `--install`). The solution builds whole on either system: the Windows projects
+compile on Linux and the Linux ones on Windows, and `dotnet test hub/Pucksley.sln` runs the tests
+that can run there (the Windows plugins' own tests need Windows, the Linux ones Linux; what the two
+share is tested on both). To build and test with `dotnet` on Linux you need the ASP.NET Core parts
+of .NET 10 as well as the SDK: on Arch and Omarchy, `sudo pacman -S aspnet-runtime aspnet-targeting-pack`.
+
 ## Status: what has and hasn't been checked
 
 **Checked:**
@@ -210,6 +231,14 @@ cd firmware/tools/test; ./run.sh        # desktop tests for the firmware's plain
   Claude API and fake pucks end to end, direct mode setup, and tool sharing over real MCP) and every
   plugin project.
 - The Docker image builds and runs on Linux x86-64 (local Whisper included).
+- The Linux desktop app, on Omarchy (Hyprland): it starts, loads every plugin, and its icon and menu
+  register with the tray. Read-only against the real PC: the volume and outputs (PipeWire), the open
+  windows and which is in front, whether the screen is locked, the app list, the clipboard, system
+  info, dark mode, a monitor's brightness over DDC, and screenshots. Media players are read and
+  controlled over the session bus against a pretend player, and an app's own volume against a silent
+  test stream, and a few small changes were made and put back (the volume, the audio output, the
+  clipboard, the monitor's brightness). About 500 tests for the PC plugins' shared half, the Linux
+  half and the app itself pass there, and so does every other hub test (about 1,550 in all).
 - Run read-only against real devices: Sonos discovery and state (three rooms: an Amp with a TV, a
   One and a Move), Shelly and Samsung discovery, Windows audio and now-playing.
 - Local Whisper transcribes a test clip in about half a second on this PC. Windows text-to-speech
@@ -231,6 +260,18 @@ cd firmware/tools/test; ./run.sh        # desktop tests for the firmware's plain
   through the speaker, and how much internal RAM is left (the Status line from `{"t":"diag"}` shows
   `heap=`).
 - **Commands that change real devices.** None were sent, by design: play, volume, power, switching.
+- **The Linux desktop app beyond Omarchy.** KDE, GNOME, Sway and X11 desktops are written to their
+  documented interfaces and tested against recorded output, but never run there. On any Linux,
+  nothing was launched, typed, locked, put to sleep or shut down for real.
+- **The Windows tray app since the PC plugins were split.** Their tools moved into a half shared with
+  Linux. The Windows half compiles (on Linux) and its logic tests were carried over, but it hasn't
+  been run on Windows since.
+- **Crashes inside .NET on the development PC are that PC's.** There (an Intel i9-14900 running
+  Omarchy), .NET 10 processes now and then die with a segmentation fault: the build tools, test
+  runs, and once the hub a few seconds after starting. Every one the kernel logged was on the same
+  physical processor core, where gcc has crashed too, and with that core left out
+  (`taskset -c 0-7,10-31`) ten test runs in ten were clean, against seven crashes in ten with it.
+  A faulty core, not the hub.
 
 The puck reports which chips answered at boot to the hub's log (**Activity** page), and
 `{"t":"diag"}` over its COM port prints one line of board state.

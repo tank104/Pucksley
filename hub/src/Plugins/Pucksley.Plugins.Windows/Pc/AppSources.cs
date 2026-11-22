@@ -1,20 +1,45 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Pucksley.Plugins.Windows.Common;
 
 namespace Pucksley.Plugins.Windows.Pc;
 
-/// <summary>Where <see cref="AppIndex"/> gets its apps: Start Menu shortcuts and shell:AppsFolder.</summary>
+/// <summary>
+/// Where <see cref="AppIndex"/> gets its apps on Windows (Start Menu shortcuts and shell:AppsFolder),
+/// what Windows people call some of them, and how one is started.
+/// </summary>
 internal static class AppSources
 {
     static readonly HashSet<string> ShortcutExtensions = new(StringComparer.OrdinalIgnoreCase) { ".lnk", ".url", ".appref-ms" };
+
+    // What people say → what the Start Menu calls it (where fuzzy matching can't get there)
+    internal static readonly IReadOnlyDictionary<string, string[]> Aliases = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["vs code"] = ["Visual Studio Code"],
+        ["vscode"] = ["Visual Studio Code"],
+        ["cmd"] = ["Command Prompt"],
+        ["explorer"] = ["File Explorer"],
+        ["windows explorer"] = ["File Explorer"],
+        ["control panel"] = ["Control Panel"],
+        ["store"] = ["Microsoft Store"],
+        ["app store"] = ["Microsoft Store"],
+    };
+
+    /// <summary>The app someone means ("Outlook", "the calculator", "Chrome"), or null.</summary>
+    public static AppEntry? Match(string spoken, IReadOnlyList<AppEntry> apps) => AppIndex.Match(spoken, apps, Aliases);
+
+    /// <summary>How to start it: the shortcut itself, or Explorer for an AppsFolder entry (how Start launches Store apps).</summary>
+    public static ProcessStartInfo LaunchInfo(AppEntry app) => app.Kind == AppKind.Shortcut
+        ? new ProcessStartInfo(app.Target) { UseShellExecute = true }
+        : new ProcessStartInfo("explorer.exe", @"shell:AppsFolder\" + app.Target) { UseShellExecute = true };
 
     public static async Task<IReadOnlyList<AppEntry>> LoadAsync(ILogger log, CancellationToken cancel)
     {
         var apps = new List<AppEntry>(await Task.Run(StartMenuShortcuts, cancel).ConfigureAwait(false));
         try
         {
-            apps.AddRange(await Blocking.RunStaAsync(AppsFolder, TimeSpan.FromSeconds(20), "Listing the Start menu's apps", cancel).ConfigureAwait(false));
+            apps.AddRange(await Sta.RunAsync(AppsFolder, TimeSpan.FromSeconds(20), "Listing the Start menu's apps", cancel).ConfigureAwait(false));
         }
         catch (Exception e) when (!cancel.IsCancellationRequested)
         {
@@ -132,7 +157,7 @@ internal static class AppSources
     /// <summary>The same list from PowerShell's Get-StartApps (slower: a second or two).</summary>
     static async Task<List<AppEntry>> StartAppsFromPowerShellAsync(CancellationToken cancel)
     {
-        var result = await ProcessRunner.PowerShellAsync("Get-StartApps | ForEach-Object { $_.Name + \"`t\" + $_.AppID }", TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
+        var result = await PowerShell.RunAsync("Get-StartApps | ForEach-Object { $_.Name + \"`t\" + $_.AppID }", TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
         return result.Output.Split('\n')
             .Select(line => line.TrimEnd('\r').Split('\t'))
             .Where(parts => parts.Length == 2 && parts[0].Trim().Length > 0 && parts[1].Trim().Length > 0)

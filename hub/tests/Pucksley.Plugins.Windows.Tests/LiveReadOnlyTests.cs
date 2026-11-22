@@ -62,17 +62,17 @@ public class LiveReadOnlyTests(ITestOutputHelper output)
     public async Task App_index_reads_the_start_menu_and_apps_folder()
     {
         var shortcuts = AppSources.StartMenuShortcuts();
-        var appsFolder = await Blocking.RunStaAsync(AppSources.AppsFolder, TimeSpan.FromSeconds(20), "AppsFolder", default);
+        var appsFolder = await Sta.RunAsync(AppSources.AppsFolder, TimeSpan.FromSeconds(20), "AppsFolder", default);
         var apps = AppIndex.Clean([.. shortcuts, .. appsFolder]);
         output.WriteLine($"{shortcuts.Count} Start Menu shortcuts + {appsFolder.Count} shell:AppsFolder entries = {apps.Count} apps after cleaning");
         foreach (var name in new[] { "Settings", "Calculator", "File Explorer", "Edge", "Notepad", "Terminal", "Outlook", "Spotify", "Chrome", "Teams", "VS Code" })
         {
-            var match = AppIndex.Match(name, apps);
+            var match = AppSources.Match(name, apps);
             output.WriteLine($"  '{name}' -> {(match is null ? "(not installed)" : $"{match.Name} [{match.Kind}]")}");
         }
         Assert.NotEmpty(appsFolder); // the native shell enumeration works (no PowerShell fallback needed)
-        Assert.NotNull(AppIndex.Match("Settings", apps));
-        Assert.NotNull(AppIndex.Match("File Explorer", apps));
+        Assert.NotNull(AppSources.Match("Settings", apps));
+        Assert.NotNull(AppSources.Match("File Explorer", apps));
     }
 
     [Fact]

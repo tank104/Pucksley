@@ -188,9 +188,13 @@ public sealed class DirectSetupTests
 /// <summary>Time zones as POSIX rules, for the puck to keep local time on its own.</summary>
 public sealed class PosixTzTests
 {
+    // FromRules is the Windows path: there .NET describes a zone by "the last Sunday of September".
+    // On Linux and macOS it lists one fixed date a year instead, and the hub reads the zone file
+    // (the test further down), so these two have nothing to check there.
     [Fact]
     public void New_Zealand_with_daylight_saving()
     {
+        if (!OperatingSystem.IsWindows()) return;
         var nz = TimeZoneInfo.FindSystemTimeZoneById("Pacific/Auckland");
         Assert.Equal("STD-12DST-13,M9.5.0/2,M4.1.0/3", PosixTz.FromRules(nz, new DateTimeOffset(2026, 11, 9, 9, 0, 0, TimeSpan.Zero)));
     }
@@ -198,6 +202,7 @@ public sealed class PosixTzTests
     [Fact]
     public void A_zone_without_daylight_saving_and_one_west_of_Greenwich()
     {
+        if (!OperatingSystem.IsWindows()) return;
         var sg = TimeZoneInfo.FindSystemTimeZoneById("Asia/Singapore");
         Assert.Equal("STD-8", PosixTz.FromRules(sg, DateTimeOffset.UtcNow));
         var ny = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
@@ -218,19 +223,13 @@ public sealed class PosixTzTests
             file.AddRange(new byte[40]);
             file.AddRange("\nNZST-12NZDT,M9.5.0,M4.1.0/3\n"u8.ToArray());
             File.WriteAllBytes(Path.Combine(dir, "Test", "Zone"), file.ToArray());
-            var before = Environment.GetEnvironmentVariable("TZDIR");
-            Environment.SetEnvironmentVariable("TZDIR", dir);
-            try
-            {
-                Assert.Equal("NZST-12NZDT,M9.5.0,M4.1.0/3", PosixTz.FromZoneFile("Test/Zone"));
-                Assert.Null(PosixTz.FromZoneFile("Test/Missing"));
-                Assert.Null(PosixTz.FromZoneFile("../../etc/passwd"));
-                Assert.Null(PosixTz.FromZoneFile("New Zealand Standard Time"));   // a Windows id: no file to look for
-            }
-            finally
-            {
-                Environment.SetEnvironmentVariable("TZDIR", before);
-            }
+            // The folder is handed in rather than set as TZDIR: that variable belongs to the whole test
+            // run, and .NET itself reads it to find zones, so other tests would lose theirs meanwhile
+            string?[] folders = [dir];
+            Assert.Equal("NZST-12NZDT,M9.5.0,M4.1.0/3", PosixTz.FromZoneFile("Test/Zone", folders));
+            Assert.Null(PosixTz.FromZoneFile("Test/Missing", folders));
+            Assert.Null(PosixTz.FromZoneFile("../../etc/passwd", folders));
+            Assert.Null(PosixTz.FromZoneFile("New Zealand Standard Time", folders));   // a Windows id: no file to look for
         }
         finally
         {

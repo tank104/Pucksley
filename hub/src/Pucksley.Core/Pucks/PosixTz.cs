@@ -15,10 +15,14 @@ public static class PosixTz
     }
 
     /// <summary>The footer of a TZif (v2+) file: the rule for times after its last transition.</summary>
-    internal static string? FromZoneFile(string id)
+    internal static string? FromZoneFile(string id) =>
+        FromZoneFile(id, [Environment.GetEnvironmentVariable("TZDIR"), "/usr/share/zoneinfo", "/usr/lib/zoneinfo"]);
+
+    /// <summary>The same, looking in <paramref name="folders"/> (where the system keeps its zone files).</summary>
+    internal static string? FromZoneFile(string id, IEnumerable<string?> folders)
     {
         if (string.IsNullOrWhiteSpace(id) || id.Contains("..", StringComparison.Ordinal) || !id.Contains('/')) return null;
-        foreach (var dir in new[] { Environment.GetEnvironmentVariable("TZDIR"), "/usr/share/zoneinfo", "/usr/lib/zoneinfo" })
+        foreach (var dir in folders)
         {
             if (string.IsNullOrEmpty(dir)) continue;
             try

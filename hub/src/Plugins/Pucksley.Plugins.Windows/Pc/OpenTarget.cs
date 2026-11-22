@@ -6,13 +6,14 @@ using static Pucksley.Plugins.Windows.Common.NativeMethods;
 
 namespace Pucksley.Plugins.Windows.Pc;
 
-/// <summary>A folder people name by voice ("Downloads", "the recycle bin"). Path may be a shell: location.</summary>
-internal sealed record KnownFolder(string Name, string Path);
-
 /// <summary>What pc_open will start, and how to describe it.</summary>
 internal sealed record OpenPlan(ProcessStartInfo StartInfo, string Description);
 
-/// <summary>Turns what someone asked to open (a URL, a path, "Downloads") into something to start.</summary>
+/// <summary>
+/// Turns what someone asked to open (a URL, a path, "Downloads") into something to start. What
+/// counts as a link, a web address or a named folder is <see cref="OpenRules"/> (shared with
+/// Linux); paths, drives and how Windows starts things are here.
+/// </summary>
 internal static partial class OpenTarget
 {
     // Link types that open a page or a known app. Others (ms-msdt:, search-ms:…) have been used in
@@ -30,36 +31,16 @@ internal static partial class OpenTarget
         ".application", ".inf", ".sys", ".dll", ".settingcontent-ms", ".library-ms", ".search-ms", ".diagcab",
     };
 
-    // "notes.txt" looks like a domain; these endings aren't top-level domains people visit
-    static readonly HashSet<string> FileLikeEndings = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "txt", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "mp3", "mp4", "wav",
-        "zip", "exe", "msi", "json", "xml", "log", "md", "ini", "cfg", "bat", "ps1", "lnk", "html", "htm",
-    };
-
-    [GeneratedRegex(@"^(?:[a-z0-9-]+\.)+([a-z]{2,24})(?::\d+)?(?:/\S*)?$", RegexOptions.IgnoreCase)]
-    private static partial Regex BareDomain();
-
     [GeneratedRegex(@"^(?:the\s+)?([a-z])(?:\s*:\\?|\s+drive)$", RegexOptions.IgnoreCase)]
     private static partial Regex DriveLetter();
 
-    // "https:", "ms-settings:"; a single letter would be a drive ("C:\…")
-    [GeneratedRegex(@"^([a-z][a-z0-9+.\-]{1,31}):", RegexOptions.IgnoreCase)]
-    private static partial Regex SchemePrefix();
-
     public static OpenPlan Resolve(string target, Func<string, bool> fileExists, Func<string, bool> directoryExists, IReadOnlyList<KnownFolder> folders)
     {
-        string t = target.Trim().Trim('"', '\'').Trim();
-        if (t.Length == 0) throw new PluginException("Open what? Give me a web address, a folder or a file.");
+        string t = OpenRules.Clean(target);
 
         // 1. A link. Judged by its scheme even when the rest doesn't parse, so nothing slips past the list
-        if (SchemePrefix().Match(t) is { Success: true } scheme && !scheme.Groups[1].Value.Equals("file", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!AllowedSchemes.Contains(scheme.Groups[1].Value))
-                throw new PluginException($"I won't open '{scheme.Groups[1].Value}:' links. I can open web pages, mail links, Settings pages, files and folders.");
-            if (!Uri.TryCreate(t, UriKind.Absolute, out var link)) throw new PluginException($"'{t}' doesn't look like a valid link.");
-            return new OpenPlan(new ProcessStartInfo(link.AbsoluteUri) { UseShellExecute = true }, link.Host.Length > 0 ? link.Host : t);
-        }
+        if (OpenRules.Link(t, AllowedSchemes, "web pages, mail links, Settings pages, files and folders") is { } link)
+            return new OpenPlan(new ProcessStartInfo(link.AbsoluteUri) { UseShellExecute = true }, OpenRules.Describe(link, t));
 
         // 2. A full path (or file: URL)
         string path = Uri.TryCreate(t, UriKind.Absolute, out var uri) && uri.IsFile ? uri.LocalPath : Environment.ExpandEnvironmentVariables(t);
@@ -69,8 +50,7 @@ internal static partial class OpenTarget
             if (directoryExists(path)) return Folder(path, Path.GetFileName(path.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : path);
             if (fileExists(path))
             {
-                if (RunnableExtensions.Contains(Path.GetExtension(path)))
-                    throw new PluginException("That file is a program or script, so I won't run it this way. To start an app, ask me to open it by name.");
+                if (RunnableExtensions.Contains(Path.GetExtension(path))) throw OpenRules.IsAProgram();
                 return new OpenPlan(new ProcessStartInfo(path) { UseShellExecute = true }, Path.GetFileName(path));
             }
             throw new PluginException($"There's no file or folder at {path}.");
@@ -85,14 +65,12 @@ internal static partial class OpenTarget
         }
 
         // 4. A web address without the https:// ("youtube.com", "bbc.co.uk/news")
-        if (!t.Contains(' ') && BareDomain().Match(t) is { Success: true } domain && !FileLikeEndings.Contains(domain.Groups[1].Value))
-            return new OpenPlan(new ProcessStartInfo("https://" + t) { UseShellExecute = true }, t);
+        if (OpenRules.WebAddress(t) is { } address) return new OpenPlan(new ProcessStartInfo(address) { UseShellExecute = true }, t);
 
         // 5. A folder people name: Downloads, Documents, the recycle bin…
-        var folder = NameMatcher.Best(t, folders, f => f.Name, threshold: 0.7);
-        if (folder is not null) return Folder(folder.Path, folder.Name);
+        if (OpenRules.NamedFolder(t, folders) is { } folder) return Folder(folder.Path, folder.Name);
 
-        throw new PluginException($"I couldn't find '{target}'. I can open web addresses, full file or folder paths, and these folders: {Text.List(folders.Select(f => f.Name).Distinct(), 14)}.");
+        throw OpenRules.NotFound(target, folders);
     }
 
     // Explorer opens folders and shell: locations alike. Quoted only when needed, and never as

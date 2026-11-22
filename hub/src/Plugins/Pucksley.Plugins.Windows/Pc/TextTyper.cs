@@ -6,7 +6,7 @@ namespace Pucksley.Plugins.Windows.Pc;
 /// <summary>Types text into the focused window as Unicode key events (any language, emoji included).</summary>
 internal static class TextTyper
 {
-    public const int MaxLength = 5000;
+    public const int MaxLength = TypedText.MaxLength;
     const int EventsPerBatch = 64;
 
     /// <summary>
@@ -16,22 +16,14 @@ internal static class TextTyper
     internal static List<INPUT[]> KeyStrokes(string text)
     {
         var strokes = new List<INPUT[]>(text.Length);
-        for (int i = 0; i < text.Length; i++)
+        foreach (var unit in TypedText.Units(text))
         {
-            char c = text[i];
-            if (c == '\r')
+            strokes.Add(unit.Kind switch
             {
-                if (i + 1 < text.Length && text[i + 1] == '\n') continue; // \r\n is one Enter
-                c = '\n';
-            }
-            if (c == '\n') strokes.Add(Press(VK_RETURN));
-            else if (c == '\t') strokes.Add(Press(VK_TAB));
-            else if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
-            {
-                strokes.Add([.. Unicode(c), .. Unicode(text[i + 1])]);
-                i++;
-            }
-            else strokes.Add(Unicode(c));
+                TypedKind.Enter => Press(VK_RETURN),
+                TypedKind.Tab => Press(VK_TAB),
+                _ => unit.Text.Length == 2 ? [.. Unicode(unit.Text[0]), .. Unicode(unit.Text[1])] : Unicode(unit.Text[0]),
+            });
         }
         return strokes;
     }

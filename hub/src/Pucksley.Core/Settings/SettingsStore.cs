@@ -32,7 +32,9 @@ public static class HubPaths
 
 /// <summary>
 /// Encrypts secrets at rest: DPAPI (this Windows user) on Windows; elsewhere AES-GCM with a key file
-/// next to the settings (readable only by the hub's user).
+/// next to the settings (readable only by the hub's user). A third form, <c>enc:p:</c> (the secret
+/// itself, base64), is what scripts/export-settings.ps1 writes so settings can move to another
+/// computer: it's read like the others, and the store encrypts it properly as soon as it loads.
 /// </summary>
 public sealed class SecretProtector
 {
@@ -60,6 +62,13 @@ public sealed class SecretProtector
 
     public static bool IsProtected(string? value) => value is not null && value.StartsWith(Prefix, StringComparison.Ordinal);
 
+    const string PortablePrefix = Prefix + "p:";
+
+    /// <summary>A secret exported in the portable form (not encrypted: only for moving settings).</summary>
+    public static bool IsPortable(string? value) => value is not null && value.StartsWith(PortablePrefix, StringComparison.Ordinal);
+
+    public static string ToPortable(string plain) => PortablePrefix + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(plain));
+
     public string Protect(string plain)
     {
         if (string.IsNullOrEmpty(plain) || IsProtected(plain)) return plain;
@@ -80,6 +89,8 @@ public sealed class SecretProtector
         try
         {
             var body = value[Prefix.Length..];
+            if (body.StartsWith("p:"))
+                return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(body[2..]));
             if (body.StartsWith("d:") && OperatingSystem.IsWindows())
                 return System.Text.Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(body[2..]), null, DataProtectionScope.CurrentUser));
             if (body.StartsWith("a:") && _key is not null)
@@ -119,6 +130,7 @@ public sealed class SettingsStore
     {
         _path = path ?? HubPaths.SettingsFile;
         Secrets = new SecretProtector(Path.GetDirectoryName(_path)!);
+        EncryptImportedSecrets();
         _current = Load();
         bool dirty = false;
         if (string.IsNullOrEmpty(_current.HubId)) { _current.HubId = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant(); dirty = true; }
@@ -160,6 +172,57 @@ public sealed class SettingsStore
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+    }
+
+    /// <summary>
+    /// Settings brought from another computer carry their secrets in the portable form: encrypt each
+    /// one with this computer's key and save, before anything else reads the file. Done on the raw
+    /// JSON, so plugin settings (which the store keeps as they were saved) are covered too.
+    /// </summary>
+    void EncryptImportedSecrets()
+    {
+        try
+        {
+            if (!File.Exists(_path)) return;
+            if (JsonNode.Parse(File.ReadAllText(_path)) is not JsonObject node) return;
+            if (!Encrypt(node)) return;
+            File.WriteAllText(_path, node.ToJsonString(Json));
+        }
+        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
+        {
+            // Load deals with a broken file
+        }
+
+        bool Encrypt(JsonNode? n)
+        {
+            bool changed = false;
+            switch (n)
+            {
+                case JsonObject o:
+                    foreach (var (key, child) in o.ToList())
+                    {
+                        if (child is JsonValue v && v.TryGetValue<string>(out var text) && SecretProtector.IsPortable(text))
+                        {
+                            o[key] = Secrets.Protect(Secrets.Unprotect(text));
+                            changed = true;
+                        }
+                        else changed |= Encrypt(child);
+                    }
+                    break;
+                case JsonArray a:
+                    for (int i = 0; i < a.Count; i++)
+                    {
+                        if (a[i] is JsonValue v && v.TryGetValue<string>(out var text) && SecretProtector.IsPortable(text))
+                        {
+                            a[i] = Secrets.Protect(Secrets.Unprotect(text));
+                            changed = true;
+                        }
+                        else changed |= Encrypt(a[i]);
+                    }
+                    break;
+            }
+            return changed;
+        }
     }
 
     HubSettings Load()

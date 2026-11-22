@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The hub on a Linux desktop: an icon in the system tray (wherever the desktop shows
+       StatusNotifierItems: KDE, Hyprland and Omarchy, Sway bars, GNOME with the AppIndicator
+       extension), plus the plugins that control this PC. Without a tray it simply runs, like the
+       console host. For a server or a NAS, use Pucksley.Server (or the Docker image) instead. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pucksley.Linux</RootNamespace>
+    <AssemblyName>pucksley</AssemblyName>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Pucksley.Core\Pucksley.Core.csproj" />
+    <ProjectReference Include="..\..\Plugins\Pucksley.Plugins.Music\Pucksley.Plugins.Music.csproj" />
+    <ProjectReference Include="..\..\Plugins\Pucksley.Plugins.Home\Pucksley.Plugins.Home.csproj" />
+    <ProjectReference Include="..\..\Plugins\Pucksley.Plugins.Utility\Pucksley.Plugins.Utility.csproj" />
+    <ProjectReference Include="..\..\Plugins\Pucksley.Plugins.Speech\Pucksley.Plugins.Speech.csproj" />
+    <ProjectReference Include="..\..\Plugins\Pucksley.Plugins.Linux\Pucksley.Plugins.Linux.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The native half of SkiaSharp (the talking face's frames, screenshots, the tray icon) -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.116.1" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pucksley.Linux.Tests" />
+  </ItemGroup>
+</Project>

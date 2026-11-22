@@ -4,9 +4,6 @@ using static Pucksley.Plugins.Windows.Common.NativeMethods;
 
 namespace Pucksley.Plugins.Windows.Pc;
 
-/// <summary>A top-level window someone would see in Alt+Tab.</summary>
-internal sealed record AppWindow(nint Handle, string Title, int ProcessId, string ProcessName, string AppName);
-
 /// <summary>The PC's app windows: listing, finding by name, bringing to the front.</summary>
 internal static class WindowList
 {
@@ -72,24 +69,7 @@ internal static class WindowList
     }
 
     /// <summary>The window someone means, by app name ("Outlook"), exe ("chrome") or title words ("budget spreadsheet").</summary>
-    public static AppWindow? Match(string spoken, IReadOnlyList<AppWindow> windows)
-    {
-        var said = Text.StripAppWords(spoken);
-        AppWindow? best = null;
-        double bestScore = 0;
-        foreach (var w in windows) // front-most first, so ties go to the most recently used
-        {
-            double score = Math.Max(
-                Math.Max(NameMatcher.Score(said, w.AppName), NameMatcher.Score(said, w.ProcessName)),
-                NameMatcher.Score(said, w.Title) * 0.95);
-            if (score > bestScore)
-            {
-                best = w;
-                bestScore = score;
-            }
-        }
-        return bestScore >= 0.55 ? best : null;
-    }
+    public static AppWindow? Match(string spoken, IReadOnlyList<AppWindow> windows) => WindowMatcher.Match(spoken, windows);
 
     /// <summary>
     /// Restores and activates a window. Windows only lets the process that received the last input

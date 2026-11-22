@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Tests for the Linux plugins. Logic runs against fakes and recorded output (pactl, hyprctl,
+       .desktop files), so most of them pass on any machine. Tests in the "Live" category only READ
+       this PC's state (volume, outputs, media players, apps, windows, a screenshot kept in memory)
+       and never change anything: no volume changes, key presses, app launches or power actions.
+       They pass on a machine without a desktop too (they report what they found).
+       To skip them, run the tests with the filter Category!=Live. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pucksley.Plugins.Linux.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- They run on Linux only; elsewhere the project is just built -->
+    <IsTestProject Condition="$([MSBuild]::IsOSPlatform('Linux'))">true</IsTestProject>
+    <IsTestProject Condition="!$([MSBuild]::IsOSPlatform('Linux'))">false</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Pucksley.Plugins.Pc.Audio" />
+    <Using Include="Pucksley.Plugins.Pc.Common" />
+    <Using Include="Pucksley.Plugins.Pc.Screen" />
+    <Using Include="Pucksley.Plugins.Pc.Speech" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <!-- The native half of SkiaSharp, which the host brings when the hub runs for real -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.116.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Plugins\Pucksley.Plugins.Linux\Pucksley.Plugins.Linux.csproj" />
+    <ProjectReference Include="..\Pucksley.TestSupport\Pucksley.TestSupport.csproj" />
+  </ItemGroup>
+</Project>

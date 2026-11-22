@@ -34,7 +34,7 @@ public sealed partial class SpeechService(SettingsStore settings, PluginManager 
             if (want.Equals("none", StringComparison.OrdinalIgnoreCase)) return null;
             var engines = plugins.TtsEngines;
             return engines.FirstOrDefault(e => e.EngineId.Equals(want, StringComparison.OrdinalIgnoreCase) && e.IsReady)
-                   ?? engines.FirstOrDefault(e => e.IsReady && e.EngineId != "windows")   // a configured cloud voice
+                   ?? engines.FirstOrDefault(e => e.IsReady && e.EngineId is not ("windows" or "espeak"))   // a configured voice, before the system's own
                    ?? engines.FirstOrDefault(e => e.IsReady);
         }
     }

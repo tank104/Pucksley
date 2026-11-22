@@ -85,6 +85,12 @@ connections fit next to Wi-Fi and the display's DMA buffers.
   at `/mcp`, bearer key). Another hub's MCP plugin connects to it, so the hub on the NAS gets the
   PC's tools from a hub on the PC that doesn't take pucks itself (it stops announcing itself over
   mDNS and refuses `/puck`). Tools that ask first are marked destructive, so the calling hub asks.
+- **Hosts** (`hub/src/Hosts`): the hub is a library (`HubHost.Build`) that three small programs
+  start: the Windows tray app, the Linux desktop app, and the console for servers and Docker. Each
+  ships the plugins that fit it; what they do alike (loading the plugin assemblies, the status
+  line, announcing a puck that's waiting) is in `DesktopHost`.
+- **The PC plugins** (`pc`, `pc-audio`) are the same on Windows and Linux: their tools are in
+  `Pucksley.Plugins.Pc`, and each system brings what's behind them (see [LINUX.md](LINUX.md)).
 - **Web page** (`wwwroot/`, embedded): setup, plugins, pucks, chat, a voice test using the browser
   mic, and a live log over Server-Sent Events.
   - Open without a key from the hub's own machine; from other machines it needs the admin key.

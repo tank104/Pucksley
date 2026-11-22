@@ -185,7 +185,9 @@ public sealed class OpensplinePlugin : PuckPlugin<OpensplineSettings>, ITalkingF
         {
             if (_service is { HasExited: true })
             {
-                SetStatus(StatusLevel.Warning, $"Openspline stopped while starting (exit code {_service.ExitCode}); see openspline.log in {Context.DataDirectory}");
+                SetStatus(StatusLevel.Warning, _service.ExitCode == 127 && !OperatingSystem.IsWindows()
+                    ? $"The start command's program isn't on this computer ({command.Split(' ')[0]}); see openspline.log in {Context.DataDirectory}"
+                    : $"Openspline stopped while starting (exit code {_service.ExitCode}); see openspline.log in {Context.DataDirectory}");
                 return false;
             }
             try

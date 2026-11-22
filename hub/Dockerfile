@@ -1,6 +1,6 @@
 # Pucksley hub for Linux / Docker (e.g. a Synology NAS with Container Manager, or a Raspberry Pi).
-# The Windows-only plugins (PC audio, PC control, Windows voices) aren't included: they need the
-# hub to run on the Windows PC itself.
+# The plugins that control a PC (PC audio, PC control, the system's own voices) aren't included:
+# they need the desktop app, running on the PC itself (Pucksley.Tray on Windows, Pucksley.Linux on Linux).
 #
 #   docker build -t pucksley-hub -f hub/Dockerfile hub
 #   docker compose -f hub/docker-compose.yml up -d

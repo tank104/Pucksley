@@ -50,7 +50,7 @@ internal static class Display
               $"$t = {target}; $m | ForEach-Object {{ $_.WmiSetBrightness(1, $t) | Out-Null }}; 'LEVEL ' + $t }} " +
               "catch { 'NONE ' + $_.Exception.Message }";
 
-        var result = await ProcessRunner.PowerShellAsync(script, TimeSpan.FromSeconds(20), cancel).ConfigureAwait(false);
+        var result = await PowerShell.RunAsync(script, TimeSpan.FromSeconds(20), cancel).ConfigureAwait(false);
         var line = result.Output.Split('\n').Select(s => s.Trim()).LastOrDefault(s => s.Length > 0) ?? "";
         if (line.StartsWith("LEVEL ", StringComparison.Ordinal) && int.TryParse(line[6..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
             return value;

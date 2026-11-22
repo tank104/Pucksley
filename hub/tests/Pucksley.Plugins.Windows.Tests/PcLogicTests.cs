@@ -5,32 +5,9 @@ using static Pucksley.Plugins.Windows.Common.NativeMethods;
 
 namespace Pucksley.Plugins.Windows.Tests;
 
-public class ScreenshotMathTests
+/// <summary>The words pc_screenshot takes; the sizing itself is tested with the shared code (Pucksley.Plugins.Pc.Tests).</summary>
+public class ScreenAreaTests
 {
-    [Theory]
-    [InlineData(3840, 2160, 1568, 882)]  // 4K
-    [InlineData(2560, 1440, 1568, 882)]
-    [InlineData(1920, 1080, 1568, 882)]
-    [InlineData(1280, 720, 1280, 720)]   // already small enough: unchanged
-    [InlineData(1568, 1000, 1568, 1000)] // exactly the limit
-    [InlineData(1080, 1920, 882, 1568)]  // portrait
-    [InlineData(5760, 1080, 1568, 294)]  // three monitors side by side
-    [InlineData(3440, 1440, 1568, 656)]  // ultrawide
-    [InlineData(10000, 1, 1568, 1)]      // never below one pixel
-    public void Fit_scales_the_long_side_down_to_1568(int width, int height, int expectedWidth, int expectedHeight) =>
-        Assert.Equal((expectedWidth, expectedHeight), ScreenshotMath.Fit(width, height));
-
-    [Fact]
-    public void Fit_keeps_the_aspect_ratio()
-    {
-        var (w, h) = ScreenshotMath.Fit(2880, 1800);
-        Assert.Equal(1568, w);
-        Assert.InRange(Math.Abs(w / (double)h - 2880 / 1800.0), 0, 0.005);
-    }
-
-    [Fact]
-    public void Fit_rejects_empty_images() => Assert.Throws<ArgumentOutOfRangeException>(() => ScreenshotMath.Fit(0, 100));
-
     [Theory]
     [InlineData(null, nameof(ScreenArea.ActiveWindow))]
     [InlineData("screen", nameof(ScreenArea.ActiveScreen))]
@@ -175,29 +152,6 @@ public class OpenTargetTests
     }
 }
 
-public class WindowMatchTests
-{
-    static readonly AppWindow[] Windows =
-    [
-        new(1, "Inbox - me@example.com - Outlook", 10, "olk", "Microsoft Outlook"),
-        new(2, "YouTube - Google Chrome", 11, "chrome", "Google Chrome"),
-        new(3, "Budget 2026.xlsx - Excel", 12, "EXCEL", "Microsoft Excel"),
-        new(4, "Calculator", 13, "CalculatorApp", "Calculator"),
-    ];
-
-    [Theory]
-    [InlineData("Outlook", 1)]
-    [InlineData("chrome", 2)]
-    [InlineData("budget", 3)] // from the title
-    [InlineData("excel", 3)]
-    [InlineData("calculator", 4)]
-    public void Finds_windows_by_app_or_title(string spoken, int handle) =>
-        Assert.Equal(handle, (int)WindowList.Match(spoken, Windows)!.Handle);
-
-    [Fact]
-    public void Apps_that_are_not_open_are_not_matched() => Assert.Null(WindowList.Match("Spotify", Windows));
-}
-
 public class HelperTests
 {
     [Theory]
@@ -209,21 +163,6 @@ public class HelperTests
     [InlineData("Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic", "Media Player")]
     [InlineData(@"C:\Program Files\Foo\foobar2000.exe", "Foobar2000")]
     public void Media_app_ids_become_names(string aumid, string expected) => Assert.Equal(expected, AppNames.GuessFromAumid(aumid));
-
-    [Theory]
-    [InlineData("A short line", 24, "A short line")]
-    [InlineData("Output: Headphones (WH-1000XM4 Stereo)", 24, "Output: Headphones (WH-…")]
-    public void Clip_trims_to_the_limit(string text, int max, string expected)
-    {
-        Assert.Equal(expected, Text.Clip(text, max));
-        Assert.True(Text.Clip(text, max).Length <= max);
-    }
-
-    [Theory]
-    [InlineData("Speakers (Realtek(R) Audio)", "Speakers")]
-    [InlineData("DELL U2720Q (NVIDIA High Definition Audio)", "DELL U2720Q")]
-    [InlineData("Plain", "Plain")]
-    public void Short_device_name_is_the_part_people_say(string name, string expected) => Assert.Equal(expected, Text.ShortDeviceName(name));
 
     [Theory]
     [InlineData(3 * 1440 + 4 * 60, "3 days 4 hours")]
