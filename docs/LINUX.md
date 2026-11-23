@@ -11,8 +11,16 @@ control.
 ## Running it
 
 ```bash
-./scripts/build.sh --hub-only            # builds dist/pucksley (brings its own .NET)
-dist/pucksley/pucksley                   # runs the hub; the page is http://127.0.0.1:8765
+curl -fsSL https://raw.githubusercontent.com/tank104/Pucksley/main/scripts/install.sh | bash
+```
+
+installs (or updates to) the latest release in `~/.local/share/pucksley` and starts it; the page is
+<http://127.0.0.1:8765>. It brings its own .NET. From source instead:
+
+```bash
+./scripts/build.sh --hub-only            # builds dist/pucksley
+dist/pucksley/pucksley                   # runs it from there
+./scripts/build.sh --hub-only --install  # …or installs it, as the line above does with a release
 ```
 
 | Command | What it does |
@@ -24,10 +32,10 @@ dist/pucksley/pucksley                   # runs the hub; the page is http://127.
 | `pucksley --autostart on` / `off` | Starts it with the desktop session (`~/.config/autostart/pucksley.desktop`). The tray menu's *Start at login* does the same. Where the session starts such things through systemd (Omarchy, GNOME, KDE Plasma), systemd also starts it again if it crashes (`~/.config/systemd/user/app-pucksley@autostart.service.d/keep-running.conf`); *Quit* in the tray menu ends it for good. |
 | `pucksley --uninstall` | Removes the launcher entry, the icons and the start at login. Settings stay. |
 
-`./scripts/build.sh --hub-only --install` builds it, copies it to `~/.local/share/pucksley` and adds
-it to the launcher in one go. Run it again to update: it stops the running hub, swaps the new build
-in and starts it again (through systemd when *Start at login* is on). So staying on the latest is,
-from a checkout of `main`:
+Installing again updates: `scripts/install.sh` (which both the curl line and `build.sh --install`
+run, and which comes inside each release as `pucksley/install.sh`) stops the running hub, swaps the
+new copy in and starts it again (through systemd when *Start at login* is on). So staying on the
+latest is the curl line again, or from a checkout of `main`:
 
 ```bash
 git pull --ff-only && ./scripts/build.sh --hub-only --install
