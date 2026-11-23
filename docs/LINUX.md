@@ -84,7 +84,7 @@ afterwards.
 Settings that name Windows programs come across as they were: Openspline's start command, for one,
 is `wsl.exe …` on Windows. Install Openspline on the Linux PC with its own installer (it needs an
 NVIDIA card) and set the plugin's start command to `sh ~/.local/share/openspline/run.sh` and its stop
-command to `pkill -f openspline_server.native`.
+command to `pkill -f '[o]penspline_server.native'` (the brackets stop it matching the shell that runs it).
 
 ## What it uses
 

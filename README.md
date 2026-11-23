@@ -22,7 +22,11 @@ PC app can lend the NAS hub just this PC's controls.
                                                                         └──────────────────────────────────────────────────┘
 ```
 
-![The puck's faces, rendered by the desktop simulator](docs/faces.png)
+![Six of the puck's faces: what's playing, the assistant answering with its talking face, the Kitchen Sonos, the heating, a lamp, and a pasta timer](docs/faces.png)
+
+*What's playing, the assistant answering (its talking face, a frame of a real reply from Openspline), the
+Kitchen Sonos, the heating, a lamp, and a timer. The rest are drawn by the firmware's desktop simulator
+(`firmware/tools/sim`), which renders every face.*
 
 ## What it does
 
