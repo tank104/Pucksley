@@ -71,12 +71,23 @@ and run `dist/Pucksley/Pucksley.exe`. A tray icon appears and the hub's page ope
 <http://127.0.0.1:8765>. (From another computer, use the link with `?key=` that the tray menu and
 the log show.)
 
-On a Linux PC: `./scripts/build.sh --hub-only` and run `dist/pucksley/pucksley` (nothing else to
-install: it brings its own .NET), or `dotnet run --project hub/src/Hosts/Pucksley.Linux`. The same
-tray icon appears wherever the desktop has a tray (KDE, Hyprland and Omarchy, Sway bars, GNOME with
-the AppIndicator extension), and the page opens at the same address. `pucksley --install` puts it in
-the app launcher and the tray menu's *Start at login* starts it with the desktop. What it needs from
-the desktop, and what works on which one, is in [docs/LINUX.md](docs/LINUX.md).
+On a Linux PC: `./scripts/build.sh --hub-only --install` (nothing else to install: it brings its
+own .NET). That puts it in `~/.local/share/pucksley` and the app launcher; start it from there, or
+`dotnet run --project hub/src/Hosts/Pucksley.Linux` while developing. The same tray icon appears
+wherever the desktop has a tray (KDE, Hyprland and Omarchy, Sway bars, GNOME with the AppIndicator
+extension; on Omarchy it's behind the bar's ‹ until you pin it), and the page opens at the same
+address. The tray menu's *Start at login* starts it with the desktop, and where the desktop runs on
+systemd (Omarchy, GNOME, KDE) starts it again if it crashes.
+
+- **Updating:** from a checkout of `main`, `git pull --ff-only && ./scripts/build.sh --hub-only --install`.
+  It stops the running hub, swaps the new build in and starts it again; settings
+  (`~/.config/pucksley`) stay.
+- **Firewall:** pucks connect on port 8765. Omarchy's firewall (ufw) blocks it until you allow it:
+  `sudo ufw allow from 192.168.0.0/16 to any port 8765 proto tcp`.
+- **Moving from the Windows app:** `scripts\export-settings.ps1` on the Windows PC packs its settings,
+  keys and puck pairings into a zip for the Linux PC; the pucks follow without re-pairing.
+
+What it needs from the desktop, and what works on which one, is in [docs/LINUX.md](docs/LINUX.md).
 
 In the page:
 

@@ -39,7 +39,9 @@ running hub and its log when it was started at login.
 
 Settings live in `~/.config/pucksley` (`PUCKSLEY_DATA` to change that); the port is 8765
 (`PUCKSLEY_PORT`). Pucks find the hub by mDNS, so the PC's firewall, if it has one, needs to let
-port 8765 in (`sudo ufw allow 8765/tcp`). A puck on USB shows up as `/dev/ttyACM0`: your user needs
+port 8765 in. Omarchy turns ufw on with everything blocked, so there it's a must:
+`sudo ufw allow from 192.168.0.0/16 to any port 8765 proto tcp` (your home network; mDNS itself
+is already allowed). A puck on USB shows up as `/dev/ttyACM0`: your user needs
 to be in the group that owns it (`uucp` on Arch and Omarchy, `dialout` on Debian, Ubuntu and Fedora).
 
 The tray icon appears wherever the desktop shows StatusNotifierItems: KDE Plasma, Hyprland bars
