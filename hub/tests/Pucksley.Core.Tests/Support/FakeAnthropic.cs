@@ -212,6 +212,11 @@ public static class Claude
             }
             if (abortAfterBlocks)
             {
+                // A reset throws away whatever the client hasn't read yet, headers included: on a fast
+                // machine it could arrive before the client had even seen the reply start, which looks
+                // like a plain network error (and gets retried). Let it read what was sent, as it would
+                // have in real life, then drop the connection.
+                await Task.Delay(200, ct);
                 ctx.Abort();
                 return;
             }
