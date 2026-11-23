@@ -263,13 +263,34 @@ of .NET 10 as well as the SDK: on Arch and Omarchy, `sudo pacman -S aspnet-runti
 
 ### Releasing
 
-Releases are made by hand: on GitHub, **Actions → Release → Run workflow**, with the version
-(`1.2.0`, or `1.2.0-beta.1` with *pre-release* ticked). It runs the tests (all but the `Live` and
-`Integration` ones, which need a real desktop, speakers or downloads), builds the Windows hub and the
-Linux hub for x86-64 and ARM64 with that version stamped in, and publishes release `v1.2.0` with
-`Pucksley-windows-x64.zip`, `pucksley-linux-x64.tar.gz` and `pucksley-linux-arm64.tar.gz`. The
-install lines above always fetch the latest full release, so a pre-release reaches only those who
-download it themselves.
+Releases are made by hand, from `main`. What a release holds: the Windows hub
+(`Pucksley-windows-x64.zip`) and the Linux hub for x86-64 and ARM64 (`pucksley-linux-x64.tar.gz`,
+`pucksley-linux-arm64.tar.gz`, each with `install.sh` inside), with the version stamped in. The puck's
+firmware isn't in it yet: that's still built with ESP-IDF.
+
+1. **Merge what's going in.** The release is built from `main` as it is when the run starts.
+2. **Pick the version.** Next after the [latest release](https://github.com/tank104/Pucksley/releases):
+   the last number for fixes, the middle one for new features (`1.1.0` → `1.1.1` or `1.2.0`). To try a
+   build first, use `1.2.0-beta.1` and tick *pre-release*: the install lines skip pre-releases, so only
+   someone who downloads it by hand gets it.
+3. **Run it:** **Actions → Release → Run workflow**, type the version (no `v`), *Run workflow*. Or from
+   a terminal: `gh workflow run release.yml -f version=1.2.0` (add `-f prerelease=true` for a beta),
+   then `gh run watch`. It runs the tests (all but the `Live` and `Integration`
+   ones, which need a real desktop, speakers or downloads), then the builds, then the release.
+4. **If it fails**, nothing is published (the release is made only once every build has passed).
+   Open the failed job, fix it on `main`, and run it again with the same version. *Re-run failed
+   jobs* is fine for a fluke, but it builds the same commit, so not for a fix.
+5. **Check it:** the [release page](https://github.com/tank104/Pucksley/releases/latest) has the three
+   files; then update a hub with its install line (above) and look at the version in its log
+   (`pucksley --version` on Linux).
+6. **Put the website live**, if the release changes what the site says: in
+   [www-pucksley-com](https://github.com/tank104/www-pucksley-com), merging to `main` only updates
+   staging (<https://stg-www.pucksley.com>); **Actions → Deploy prd → Run workflow** puts it on
+   <https://www.pucksley.com>. Do this after the release exists, since the site's install lines fetch it.
+
+A bad release can be taken back with `gh release delete v1.2.0 --cleanup-tag` (the install lines then
+fetch the one before it). Local builds (`build.sh`, `build.ps1`) say `1.0.0`: only releases carry a
+real version.
 
 ## Status: what has and hasn't been checked
 
