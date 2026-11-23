@@ -11,8 +11,16 @@ control.
 ## Running it
 
 ```bash
-./scripts/build.sh --hub-only            # builds dist/pucksley (brings its own .NET)
-dist/pucksley/pucksley                   # runs the hub; the page is http://127.0.0.1:8765
+curl -fsSL https://raw.githubusercontent.com/tank104/Pucksley/main/scripts/install.sh | bash
+```
+
+installs (or updates to) the latest release in `~/.local/share/pucksley` and starts it; the page is
+<http://127.0.0.1:8765>. It brings its own .NET. From source instead:
+
+```bash
+./scripts/build.sh --hub-only            # builds dist/pucksley
+dist/pucksley/pucksley                   # runs it from there
+./scripts/build.sh --hub-only --install  # …or installs it, as the line above does with a release
 ```
 
 | Command | What it does |
@@ -24,10 +32,10 @@ dist/pucksley/pucksley                   # runs the hub; the page is http://127.
 | `pucksley --autostart on` / `off` | Starts it with the desktop session (`~/.config/autostart/pucksley.desktop`). The tray menu's *Start at login* does the same. Where the session starts such things through systemd (Omarchy, GNOME, KDE Plasma), systemd also starts it again if it crashes (`~/.config/systemd/user/app-pucksley@autostart.service.d/keep-running.conf`); *Quit* in the tray menu ends it for good. |
 | `pucksley --uninstall` | Removes the launcher entry, the icons and the start at login. Settings stay. |
 
-`./scripts/build.sh --hub-only --install` builds it, copies it to `~/.local/share/pucksley` and adds
-it to the launcher in one go. Run it again to update: it stops the running hub, swaps the new build
-in and starts it again (through systemd when *Start at login* is on). So staying on the latest is,
-from a checkout of `main`:
+Installing again updates: `scripts/install.sh` (which both the curl line and `build.sh --install`
+run, and which comes inside each release as `pucksley/install.sh`) stops the running hub, swaps the
+new copy in and starts it again (through systemd when *Start at login* is on). So staying on the
+latest is the curl line again, or from a checkout of `main`:
 
 ```bash
 git pull --ff-only && ./scripts/build.sh --hub-only --install
@@ -39,7 +47,9 @@ running hub and its log when it was started at login.
 
 Settings live in `~/.config/pucksley` (`PUCKSLEY_DATA` to change that); the port is 8765
 (`PUCKSLEY_PORT`). Pucks find the hub by mDNS, so the PC's firewall, if it has one, needs to let
-port 8765 in (`sudo ufw allow 8765/tcp`). A puck on USB shows up as `/dev/ttyACM0`: your user needs
+port 8765 in. Omarchy turns ufw on with everything blocked, so there it's a must:
+`sudo ufw allow from 192.168.0.0/16 to any port 8765 proto tcp` (your home network; mDNS itself
+is already allowed). A puck on USB shows up as `/dev/ttyACM0`: your user needs
 to be in the group that owns it (`uucp` on Arch and Omarchy, `dialout` on Debian, Ubuntu and Fedora).
 
 The tray icon appears wherever the desktop shows StatusNotifierItems: KDE Plasma, Hyprland bars

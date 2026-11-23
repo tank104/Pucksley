@@ -66,17 +66,54 @@ direct mode if the NAS is off), and **the PC app** sharing only the PC's control
 
 ### 1. Run the hub
 
-On a Windows PC: `dotnet run --project hub/src/Hosts/Pucksley.Tray`, or build it with `./scripts/build.ps1`
-and run `dist/Pucksley/Pucksley.exe`. A tray icon appears and the hub's page opens at
-<http://127.0.0.1:8765>. (From another computer, use the link with `?key=` that the tray menu and
-the log show.)
+#### On a Windows PC
 
-On a Linux PC: `./scripts/build.sh --hub-only` and run `dist/pucksley/pucksley` (nothing else to
-install: it brings its own .NET), or `dotnet run --project hub/src/Hosts/Pucksley.Linux`. The same
-tray icon appears wherever the desktop has a tray (KDE, Hyprland and Omarchy, Sway bars, GNOME with
-the AppIndicator extension), and the page opens at the same address. `pucksley --install` puts it in
-the app launcher and the tray menu's *Start at login* starts it with the desktop. What it needs from
-the desktop, and what works on which one, is in [docs/LINUX.md](docs/LINUX.md).
+In PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/tank104/Pucksley/main/scripts/install.ps1 | iex
+```
+
+That downloads the [latest release](https://github.com/tank104/Pucksley/releases/latest), installs
+it in `%LOCALAPPDATA%\Programs\Pucksley` with a Start menu entry, and starts it (nothing else to
+install: it brings its own .NET). A tray icon appears and the hub's page opens at
+<http://127.0.0.1:8765>. (From another computer, use the link with `?key=` that the tray menu and
+the log show.) Tick *Start with Windows* in the tray menu to have it there every time. Allow it
+through Windows Firewall on private networks when Windows asks, so the pucks can reach it.
+
+- **Updating:** run the same line again. It stops the hub, swaps the new copy in and starts it;
+  settings (`%APPDATA%\Pucksley`) stay.
+- **By hand:** download `Pucksley-windows-x64.zip` from the release, unpack it somewhere to keep, and
+  run `Pucksley.exe`.
+- **From source:** `dotnet run --project hub/src/Hosts/Pucksley.Tray`, or `./scripts/build.ps1 -HubOnly`
+  and run `dist/Pucksley/Pucksley.exe` (or `scripts\install.ps1 -From dist\Pucksley` to install that).
+
+#### On a Linux PC
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tank104/Pucksley/main/scripts/install.sh | bash
+```
+
+That downloads the latest release (x86-64 or ARM64), installs it in `~/.local/share/pucksley` and the
+app launcher, and starts it (nothing else to install: it brings its own .NET). The same tray icon
+appears wherever the desktop has a tray (KDE, Hyprland and Omarchy, Sway bars, GNOME with the
+AppIndicator extension; on Omarchy it's behind the bar's ‹ until you pin it), and the page opens at
+the same address. Tick *Start at login* in the tray menu to start it with the desktop; where the
+desktop runs on systemd (Omarchy, GNOME, KDE) that also starts it again if it ever crashes.
+
+- **Firewall:** pucks connect on port 8765. Omarchy's firewall (ufw) blocks it until you allow it:
+  `sudo ufw allow from 192.168.0.0/16 to any port 8765 proto tcp`.
+- **Updating:** run the same line again. It stops the hub, swaps the new copy in and starts it;
+  settings (`~/.config/pucksley`) stay.
+- **By hand:** download `pucksley-linux-x64.tar.gz` (or `-arm64`) from the release, unpack it and run
+  `./install.sh` in the `pucksley` folder.
+- **From source:** `./scripts/build.sh --hub-only --install` builds and installs it the same way
+  (`git pull --ff-only` first to update), or `dotnet run --project hub/src/Hosts/Pucksley.Linux` while
+  developing.
+- **Moving from the Windows app:** `scripts\export-settings.ps1` on the Windows PC packs its settings,
+  keys and puck pairings into a zip for the Linux PC; the pucks follow without re-pairing.
+
+What it needs from the desktop, and what works on which one, is in [docs/LINUX.md](docs/LINUX.md).
 
 In the page:
 
@@ -219,6 +256,16 @@ compile on Linux and the Linux ones on Windows, and `dotnet test hub/Pucksley.sl
 that can run there (the Windows plugins' own tests need Windows, the Linux ones Linux; what the two
 share is tested on both). To build and test with `dotnet` on Linux you need the ASP.NET Core parts
 of .NET 10 as well as the SDK: on Arch and Omarchy, `sudo pacman -S aspnet-runtime aspnet-targeting-pack`.
+
+### Releasing
+
+Releases are made by hand: on GitHub, **Actions → Release → Run workflow**, with the version
+(`1.2.0`, or `1.2.0-beta.1` with *pre-release* ticked). It runs the tests (all but the `Live` and
+`Integration` ones, which need a real desktop, speakers or downloads), builds the Windows hub and the
+Linux hub for x86-64 and ARM64 with that version stamped in, and publishes release `v1.2.0` with
+`Pucksley-windows-x64.zip`, `pucksley-linux-x64.tar.gz` and `pucksley-linux-arm64.tar.gz`. The
+install lines above always fetch the latest full release, so a pre-release reaches only those who
+download it themselves.
 
 ## Status: what has and hasn't been checked
 

@@ -57,49 +57,8 @@ if ((hub)); then
   echo "   -> $out/pucksley"
 
   if ((install)); then
-    # The installed copy lives in one place, so the launcher and the start at login always run the
-    # latest build. Installing again stops the running hub, swaps the new build in and starts it again.
-    home="${XDG_DATA_HOME:-$HOME/.local/share}/pucksley"
-    unit='app-pucksley@autostart.service' # what systemd makes of the start at login
-    autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/pucksley.desktop"
-    echo "== installing to $home"
-    have_systemd=0
-    systemctl --user show-environment >/dev/null 2>&1 && have_systemd=1
-    was_running=0
-    if ((have_systemd)) && systemctl --user is-active --quiet "$unit"; then
-      was_running=1
-      systemctl --user stop "$unit"
-    fi
-    if pgrep -u "$(id -u)" -x pucksley >/dev/null; then
-      was_running=1
-      pkill -TERM -u "$(id -u)" -x pucksley || true
-      for _ in $(seq 50); do pgrep -u "$(id -u)" -x pucksley >/dev/null || break; sleep 0.2; done
-      if pgrep -u "$(id -u)" -x pucksley >/dev/null; then
-        echo "Pucksley didn't stop: quit it from its tray icon and try again." >&2
-        exit 1
-      fi
-    fi
-    rm -rf "$home.new" "$home.old"
-    mkdir -p "$home.new"
-    cp -a "$out/." "$home.new/"
-    [[ -d "$home" ]] && mv "$home" "$home.old"
-    mv "$home.new" "$home"
-    rm -rf "$home.old"
-    "$home/pucksley" --install
-
-    # Start it again (and on a first install with the start at login already on): through systemd
-    # where the desktop session has it, so a crash brings it back, otherwise on its own.
-    if ((was_running)) || [[ -f "$autostart" ]]; then
-      if ((have_systemd)) && [[ -f "$autostart" ]] && systemctl --user start "$unit" 2>/dev/null; then
-        echo "   Pucksley is running (systemd restarts it if it crashes)."
-      else
-        setsid -f "$home/pucksley" >/dev/null 2>&1 </dev/null
-        echo "   Pucksley is running."
-      fi
-    else
-      echo "   Start it from the app launcher, or: $home/pucksley"
-      echo "   To start it with the desktop (and again after a crash): $home/pucksley --autostart on"
-    fi
+    # The same installer a release comes with: replaces and restarts a running hub
+    "$root/scripts/install.sh" "$out"
   fi
 fi
 
