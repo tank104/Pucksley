@@ -451,7 +451,8 @@ public sealed class AgentTests
     public async Task A_connection_dropped_mid_stream_becomes_a_friendly_failure()
     {
         var h = await AgentHarness.CreateAsync();
-        h.Claude.Then(Reply("end_turn", [TextBlock("The kitchen is")], abortAfterBlocks: true));
+        // Every attempt drops the same way, so a retry can't turn it into a success
+        h.Claude.Fallback = Reply("end_turn", [TextBlock("The kitchen is")], abortAfterBlocks: true);
         var result = await h.AskAsync("hello");
         Assert.True(result.Failed, result.Text);
         await AssertRolledBackAsync(h);
