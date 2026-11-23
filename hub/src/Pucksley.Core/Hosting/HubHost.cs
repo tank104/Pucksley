@@ -14,8 +14,8 @@ using Pucksley.Core.Web;
 namespace Pucksley.Core.Hosting;
 
 /// <summary>
-/// Builds and runs the hub. Hosts (the Windows tray app, the Linux/Docker console) call
-/// <see cref="Build"/> with the plugin assemblies they ship.
+/// Builds and runs the hub. Hosts (the Windows tray app, the Linux desktop app, the console for
+/// servers and Docker) call <see cref="Build"/> with the plugin assemblies they ship.
 /// </summary>
 public static class HubHost
 {

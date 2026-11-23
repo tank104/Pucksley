@@ -4,19 +4,16 @@ using Clipboard = System.Windows.Forms.Clipboard;
 
 namespace Pucksley.Plugins.Windows.Pc;
 
-/// <summary>What's on the clipboard: text, an image (as a JPEG for Claude), files, or nothing.</summary>
-internal sealed record ClipboardContents(string? Text, byte[]? ImageJpeg, int ImageWidth, int ImageHeight, IReadOnlyList<string>? Files);
-
 /// <summary>The Windows clipboard. OLE clipboard calls need an STA thread, so each runs on its own.</summary>
 internal static class ClipboardAccess
 {
     static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     public static Task<ClipboardContents> ReadAsync(CancellationToken cancel) =>
-        Blocking.RunStaAsync(() => Retry(Read), Timeout, "The clipboard", cancel);
+        Sta.RunAsync(() => Retry(Read), Timeout, "The clipboard", cancel);
 
     public static Task WriteAsync(string text, CancellationToken cancel) =>
-        Blocking.RunStaAsync(() => Retry(() =>
+        Sta.RunAsync(() => Retry(() =>
         {
             Clipboard.SetText(text); // copies the data, so it outlives this thread
             return true;

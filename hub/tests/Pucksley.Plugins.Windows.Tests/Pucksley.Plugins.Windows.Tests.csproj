@@ -8,12 +8,20 @@
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <IsPackable>false</IsPackable>
-    <IsTestProject>true</IsTestProject>
+    <!-- They run on Windows only; elsewhere the project is just built -->
+    <IsTestProject Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</IsTestProject>
+    <IsTestProject Condition="!$([MSBuild]::IsOSPlatform('Windows'))">false</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
     <Using Include="Xunit" />
+    <!-- The half of the plugins that Linux shares (its own tests are in Pucksley.Plugins.Pc.Tests) -->
+    <Using Include="Pucksley.Plugins.Pc.Audio" />
+    <Using Include="Pucksley.Plugins.Pc.Common" />
+    <Using Include="Pucksley.Plugins.Pc.Desktop" />
+    <Using Include="Pucksley.Plugins.Pc.Screen" />
+    <Using Include="Pucksley.Plugins.Pc.Speech" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

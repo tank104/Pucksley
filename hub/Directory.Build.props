@@ -11,7 +11,11 @@
     <RepositoryUrl>https://github.com/tank104/Pucksley</RepositoryUrl>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <!-- CA1416: platform checks are done by project split (Windows-only code lives in Pucksley.Windows) -->
+    <!-- CA1416: platform checks are done by project split (Windows-only code lives in Pucksley.Plugins.Windows,
+         Linux-only code in Pucksley.Plugins.Linux; what they share is in Pucksley.Plugins.Pc) -->
     <NoWarn>$(NoWarn);CS1591;CA1416</NoWarn>
+    <!-- Lets the Windows projects compile on Linux and macOS too (they still only run on Windows), so
+         the whole solution builds anywhere and a change to shared code is checked against both hosts. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 </Project>

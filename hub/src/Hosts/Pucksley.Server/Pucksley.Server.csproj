@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- The hub as a console app / service: Linux, Docker (e.g. a Synology NAS), macOS, or Windows without the tray. -->
+  <!-- The hub as a console app / service: a Linux server, Docker (e.g. a Synology NAS), macOS, or Windows
+       without the tray. On a Linux desktop, Pucksley.Linux adds the tray icon and the PC's own plugins. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

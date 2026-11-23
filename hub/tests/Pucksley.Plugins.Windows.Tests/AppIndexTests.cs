@@ -58,12 +58,12 @@ public class AppIndexTests
     [InlineData("edge", "Microsoft Edge")]
     [InlineData("spotify", "Spotify")]
     public void Match_finds_what_people_say(string spoken, string expected) =>
-        Assert.Equal(expected, AppIndex.Match(spoken, Apps)?.Name);
+        Assert.Equal(expected, AppSources.Match(spoken, Apps)?.Name);
 
     [Theory]
     [InlineData("Photoshop")]
     [InlineData("the garage door")]
-    public void Match_returns_null_for_apps_that_are_not_installed(string spoken) => Assert.Null(AppIndex.Match(spoken, Apps));
+    public void Match_returns_null_for_apps_that_are_not_installed(string spoken) => Assert.Null(AppSources.Match(spoken, Apps));
 
     [Fact]
     public void Not_found_message_suggests_the_closest_names()
@@ -76,7 +76,7 @@ public class AppIndexTests
     [Fact]
     public void Store_apps_launch_through_explorer_and_the_apps_folder()
     {
-        var info = AppIndex.LaunchInfo(Apps.Single(a => a.Name == "Calculator"));
+        var info = AppSources.LaunchInfo(Apps.Single(a => a.Name == "Calculator"));
         Assert.Equal("explorer.exe", info.FileName);
         Assert.Equal(@"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", info.Arguments);
         Assert.True(info.UseShellExecute);
@@ -85,29 +85,8 @@ public class AppIndexTests
     [Fact]
     public void Shortcuts_launch_through_the_shell()
     {
-        var info = AppIndex.LaunchInfo(Apps.Single(a => a.Name == "Spotify"));
+        var info = AppSources.LaunchInfo(Apps.Single(a => a.Name == "Spotify"));
         Assert.Equal(Programs + "Spotify.lnk", info.FileName);
         Assert.True(info.UseShellExecute);
-    }
-
-    [Fact]
-    public async Task The_index_is_cached_and_refreshed_in_the_background_after_ten_minutes()
-    {
-        int loads = 0;
-        var now = new DateTime(2026, 11, 9, 20, 0, 0, DateTimeKind.Utc);
-        var index = new AppIndex(_ =>
-        {
-            Interlocked.Increment(ref loads);
-            return Task.FromResult<IReadOnlyList<AppEntry>>(Raw);
-        }, () => now);
-
-        var first = await index.GetAsync(default);
-        await index.GetAsync(default);
-        Assert.Equal(1, loads);
-
-        now += TimeSpan.FromMinutes(11);
-        var stale = await index.GetAsync(default); // answers at once from the old list…
-        Assert.Same(first, stale);
-        await Wait.UntilAsync(() => Volatile.Read(ref loads) == 2); // …while it reloads
     }
 }

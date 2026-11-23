@@ -12,16 +12,17 @@ internal static class SystemInfo
     public static async Task<string> DescribeAsync(CancellationToken cancel)
     {
         int cpu = await CpuPercentAsync(cancel).ConfigureAwait(false);
-        var parts = new List<string> { $"{Environment.MachineName}: {WindowsVersion()}" };
-        string? processor = ProcessorName();
-        parts.Add($"CPU {cpu}%{(processor is null ? "" : $" ({processor})")}");
-        if (Memory() is { } memory) parts.Add(memory);
-        if (SystemDrive() is { } drive) parts.Add(drive);
-        parts.Add($"Up {Duration(TimeSpan.FromMilliseconds(Environment.TickCount64))}");
-        var ips = LanTools.LocalIPv4Addresses().Take(3).Select(a => a.ToString()).ToList();
-        parts.Add(ips.Count == 0 ? "No network address" : $"IP {string.Join(", ", ips)}");
-        parts.Add(Battery());
-        return string.Join(". ", parts) + ".";
+        return new SystemFacts
+        {
+            Machine = Environment.MachineName,
+            OsVersion = WindowsVersion(),
+            CpuPercent = cpu,
+            Processor = ProcessorName(),
+            Memory = Memory(),
+            Drive = SystemDrive(),
+            Uptime = TimeSpan.FromMilliseconds(Environment.TickCount64),
+            Battery = Battery(),
+        }.Describe();
     }
 
     /// <summary>Busy share of all cores over a short sample.</summary>
@@ -58,7 +59,7 @@ internal static class SystemInfo
         var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
         if (!GlobalMemoryStatusEx(ref status)) return null;
         double total = status.ullTotalPhys / 1073741824.0, used = (status.ullTotalPhys - status.ullAvailPhys) / 1073741824.0;
-        return $"Memory {used:0.0} of {total:0.0} GB used ({status.dwMemoryLoad}%)";
+        return SystemFacts.MemoryText(used, total, (int)status.dwMemoryLoad);
     }
 
     static string? SystemDrive()
@@ -66,7 +67,7 @@ internal static class SystemInfo
         try
         {
             var drive = new DriveInfo(Path.GetPathRoot(Environment.SystemDirectory)!);
-            return $"{drive.Name.TrimEnd('\\')} {drive.AvailableFreeSpace / 1073741824.0:0} GB free of {drive.TotalSize / 1073741824.0:0} GB";
+            return SystemFacts.DriveText(drive.Name.TrimEnd('\\'), drive.AvailableFreeSpace / 1073741824.0, drive.TotalSize / 1073741824.0);
         }
         catch (IOException)
         {
@@ -77,18 +78,13 @@ internal static class SystemInfo
     static string Battery()
     {
         if (!GetSystemPowerStatus(out var power) || (power.BatteryFlag & 128) != 0 || power.BatteryFlag == 255) return "No battery";
-        string percent = power.BatteryLifePercent <= 100 ? $"Battery {power.BatteryLifePercent}%" : "Battery";
-        if ((power.BatteryFlag & 8) != 0) return $"{percent}, charging";
-        if (power.ACLineStatus == 1) return $"{percent}, plugged in";
-        return power.BatteryLifeTime > 0 ? $"{percent}, about {Duration(TimeSpan.FromSeconds(power.BatteryLifeTime))} left" : $"{percent}, on battery";
+        return SystemFacts.BatteryText(
+            power.BatteryLifePercent <= 100 ? power.BatteryLifePercent : null,
+            charging: (power.BatteryFlag & 8) != 0,
+            pluggedIn: power.ACLineStatus == 1,
+            remaining: power.BatteryLifeTime > 0 ? TimeSpan.FromSeconds(power.BatteryLifeTime) : null);
     }
 
     /// <summary>"3 days 4 hours", "5 hours 12 minutes", "12 minutes".</summary>
-    internal static string Duration(TimeSpan t)
-    {
-        static string Unit(int n, string unit) => $"{n} {unit}{(n == 1 ? "" : "s")}";
-        if (t.TotalDays >= 1) return $"{Unit((int)t.TotalDays, "day")} {Unit(t.Hours, "hour")}";
-        if (t.TotalHours >= 1) return $"{Unit(t.Hours, "hour")} {Unit(t.Minutes, "minute")}";
-        return Unit(Math.Max(0, t.Minutes), "minute");
-    }
+    internal static string Duration(TimeSpan t) => Text.Duration(t);
 }

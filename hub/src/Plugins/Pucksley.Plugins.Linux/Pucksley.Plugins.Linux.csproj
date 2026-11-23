@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Plugins that control the Linux PC the hub runs on: its sound (PipeWire or PulseAudio, and MPRIS
+       media players) and its desktop (apps, windows, the screen, the clipboard, power). Only loaded by
+       the Linux desktop host. What they share with Windows (the PC audio plugin's tools, name
+       matching) is in Pucksley.Plugins.Pc.
+
+       They lean on what a desktop already has rather than on libraries: pactl, the session's D-Bus
+       services, xdg-open, and the compositor's own command (hyprctl, swaymsg). Whatever is missing
+       just switches that one tool off, with a message saying what to install. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pucksley.Plugins.Linux</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="Pucksley.Plugins.Pc.Audio" />
+    <Using Include="Pucksley.Plugins.Pc.Common" />
+    <Using Include="Pucksley.Plugins.Pc.Desktop" />
+    <Using Include="Pucksley.Plugins.Pc.Screen" />
+    <Using Include="Pucksley.Plugins.Pc.Speech" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Screenshots and clipboard pictures are scaled and sent to Claude as JPEG. The native library
+         comes from the host (SkiaSharp.NativeAssets.Linux.NoDependencies). -->
+    <PackageReference Include="SkiaSharp" Version="3.116.1" />
+    <!-- D-Bus: media players (MPRIS), logind (lock, sleep, brightness), the desktop portal -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Pucksley.Sdk\Pucksley.Sdk.csproj" />
+    <ProjectReference Include="..\Pucksley.Plugins.Pc\Pucksley.Plugins.Pc.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pucksley.Plugins.Linux.Tests" />
+    <!-- The Linux desktop host shows notifications and opens the hub's page the same way the plugins do -->
+    <InternalsVisibleTo Include="pucksley" />
+    <InternalsVisibleTo Include="Pucksley.Linux.Tests" />
+  </ItemGroup>
+</Project>

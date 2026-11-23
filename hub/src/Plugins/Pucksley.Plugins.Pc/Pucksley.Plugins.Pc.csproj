@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The half of the "this PC" plugins that is the same on every operating system: the PC audio
+       plugin (its tools, dial and Home face), name matching, and small helpers. Pucksley.Plugins.Windows
+       and Pucksley.Plugins.Linux bring the parts that talk to the operating system. No plugin is loaded
+       from here: the plugin classes are abstract. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pucksley.Plugins.Pc</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Pucksley.Sdk\Pucksley.Sdk.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pucksley.Plugins.Windows" />
+    <InternalsVisibleTo Include="Pucksley.Plugins.Linux" />
+    <InternalsVisibleTo Include="Pucksley.Plugins.Pc.Tests" />
+    <InternalsVisibleTo Include="Pucksley.Plugins.Windows.Tests" />
+    <InternalsVisibleTo Include="Pucksley.Plugins.Linux.Tests" />
+  </ItemGroup>
+</Project>

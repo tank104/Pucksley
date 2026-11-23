@@ -145,6 +145,33 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
+    public void Exported_secrets_load_and_are_encrypted_with_this_computers_key()
+    {
+        // What scripts/export-settings.ps1 makes of a Windows hub's settings
+        var path = NewPath();
+        string key = SecretProtector.ToPortable("sk-ant-moved-across"), token = SecretProtector.ToPortable("0123456789abcdef0123456789abcdef");
+        string vendor = SecretProtector.ToPortable("vendor-key-1"), lamp = SecretProtector.ToPortable("lamp-pw");
+        File.WriteAllText(path, $$$"""
+            {"hubId": "a1a1a1a1a1a1a1a1", "assistant": {"anthropicApiKey": "{{{key}}}"},
+             "pucks": [{"id": "a1b2c3d4e5f60708", "name": "Kitchen", "token": "{{{token}}}"}],
+             "plugins": {"demo": {"settings": {"host": "10.0.0.5", "apiKey": "{{{vendor}}}", "devices": [{"name": "Lamp", "password": "{{{lamp}}}"}]} } } }
+            """);
+
+        var store = new SettingsStore(path);
+        Assert.Equal("sk-ant-moved-across", store.Current.Assistant.AnthropicApiKey);
+        Assert.Equal("0123456789abcdef0123456789abcdef", store.Current.Pucks.Single().Token);
+        Assert.Equal("a1a1a1a1a1a1a1a1", store.Current.HubId);
+        var demo = (DemoSettings)store.PluginSettings("demo", typeof(DemoSettings));
+        Assert.Equal(("10.0.0.5", "vendor-key-1", "lamp-pw"), (demo.Host, demo.ApiKey, demo.Devices.Single().Password));
+
+        // …and none of them is left readable on disk
+        var raw = File.ReadAllText(path);
+        Assert.DoesNotContain("enc:p:", raw);
+        foreach (var secret in new[] { key, token, vendor, lamp }) Assert.DoesNotContain(secret[6..], raw);
+        Assert.Equal("vendor-key-1", ((DemoSettings)new SettingsStore(path).PluginSettings("demo", typeof(DemoSettings))).ApiKey);
+    }
+
+    [Fact]
     public void Update_saves_and_raises_Changed()
     {
         var path = NewPath();
