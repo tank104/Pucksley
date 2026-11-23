@@ -283,8 +283,9 @@ of .NET 10 as well as the SDK: on Arch and Omarchy, `sudo pacman -S aspnet-runti
 
 Releases are made by hand, from `main`. What a release holds: the Windows hub
 (`Pucksley-windows-x64.zip`) and the Linux hub for x86-64 and ARM64 (`pucksley-linux-x64.tar.gz`,
-`pucksley-linux-arm64.tar.gz`, each with `install.sh` inside), with the version stamped in. The puck's
-firmware isn't in it yet: that's still built with ESP-IDF.
+`pucksley-linux-arm64.tar.gz`, each with `install.sh` inside), and the puck's firmware
+(`pucksley-firmware.zip`), all with the version stamped in. The browser flasher on pucksley.com takes
+its firmware from the latest release when the site is deployed.
 
 1. **Merge what's going in.** The release is built from `main` as it is when the run starts.
 2. **Pick the version.** Next after the [latest release](https://github.com/tank104/Pucksley/releases):
@@ -298,13 +299,14 @@ firmware isn't in it yet: that's still built with ESP-IDF.
 4. **If it fails**, nothing is published (the release is made only once every build has passed).
    Open the failed job, fix it on `main`, and run it again with the same version. *Re-run failed
    jobs* is fine for a fluke, but it builds the same commit, so not for a fix.
-5. **Check it:** the [release page](https://github.com/tank104/Pucksley/releases/latest) has the three
+5. **Check it:** the [release page](https://github.com/tank104/Pucksley/releases/latest) has the four
    files; then update a hub with its install line (above) and look at the version in its log
-   (`pucksley --version` on Linux).
-6. **Put the website live**, if the release changes what the site says: in
+   (`pucksley --version` on Linux), and flash a puck (its Status face shows the version).
+6. **Deploy the website**: in
    [www-pucksley-com](https://github.com/tank104/www-pucksley-com), merging to `main` only updates
    staging (<https://stg-www.pucksley.com>); **Actions → Deploy prd → Run workflow** puts it on
-   <https://www.pucksley.com>. Do this after the release exists, since the site's install lines fetch it.
+   <https://www.pucksley.com>. Do this after every release: the site's install lines fetch the release,
+   and its flasher serves the firmware that was the latest when the site was deployed.
 
 A bad release can be taken back with `gh release delete v1.2.0 --cleanup-tag` (the install lines then
 fetch the one before it). Local builds (`build.sh`, `build.ps1`) say `1.0.0`: only releases carry a
