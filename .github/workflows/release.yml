@@ -5,6 +5,8 @@
 #   Pucksley-windows-x64.zip       the Windows tray app (a Pucksley folder)
 #   pucksley-linux-x64.tar.gz      the Linux desktop app (a pucksley folder, install.sh inside)
 #   pucksley-linux-arm64.tar.gz
+#   pucksley-firmware.zip          the puck's firmware (a pucksley-firmware folder: the images and flash_args,
+#                                  for esptool or the flasher on pucksley.com, which fetches it from here)
 name: Release
 
 on:
@@ -108,9 +110,44 @@ jobs:
           path: pucksley-${{ matrix.rid }}.tar.gz
           if-no-files-found: error
 
+  firmware:
+    name: Puck firmware
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp the version
+        run: |
+          sed -i -E "s/^#define PUCK_FW_VERSION \".*\"/#define PUCK_FW_VERSION \"$VERSION\"/" firmware/main/config.h
+          grep -q "PUCK_FW_VERSION \"$VERSION\"" firmware/main/config.h
+      - name: Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: esp32s3
+          path: firmware
+      # The same files idf.py flashes, laid out as flash_args names them, so esptool can take
+      # "write_flash @flash_args" from inside the folder
+      - name: Package
+        run: |
+          build=firmware/build
+          out=out/pucksley-firmware
+          mkdir -p "$out/bootloader" "$out/partition_table"
+          cp "$build/bootloader/bootloader.bin" "$out/bootloader/"
+          cp "$build/partition_table/partition-table.bin" "$out/partition_table/"
+          cp "$build/ota_data_initial.bin" "$build/pucksley.bin" "$build/flash_args" "$out/"
+          echo "$VERSION" > "$out/version.txt"
+          cat "$out/flash_args"
+          (cd out && zip -qr ../pucksley-firmware.zip pucksley-firmware)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: pucksley-firmware.zip
+          if-no-files-found: error
+
   release:
     name: Publish the release
-    needs: [windows, linux]
+    needs: [windows, linux, firmware]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -132,6 +169,7 @@ jobs:
           - **Linux**: \`curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install.sh | bash\`
 
           Or download the file below for your computer and unpack it: run \`Pucksley.exe\` on Windows, or \`./install.sh\` from the \`pucksley\` folder on Linux.
-          The firmware for the puck isn't here yet: build it with ESP-IDF (see the README)."
+
+          **The puck's firmware**: flash it from the browser at https://www.pucksley.com/flash/ (Chrome or Edge, over USB), or unpack \`pucksley-firmware.zip\` and, inside the \`pucksley-firmware\` folder, run \`python -m esptool --chip esp32s3 -p <port> write_flash @flash_args\`."
           gh release create "v$VERSION" files/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Pucksley $VERSION" --notes "$notes" --generate-notes "${flags[@]}"
