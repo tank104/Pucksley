@@ -139,16 +139,34 @@ In the page:
 - **Household**: where you live (for weather and local answers), the time zone, and a few lines
   about the home (who lives here, which speaker is where). Claude reads them on every question.
 
-### 2. Flash the puck (ESP-IDF 5.5)
+### 2. Flash the puck
+
+Plug the puck into the computer with a USB-C cable. If it doesn't show up, hold its BOOT button while
+plugging it in. On Linux it's `/dev/ttyACM0`, and your user needs to be in the group that owns it
+(`uucp` on Arch and Omarchy, `dialout` on Debian, Ubuntu and Fedora).
+
+**From your browser** (Chrome or Edge, nothing to install): open <https://www.pucksley.com/flash/>,
+press *Connect*, pick the puck. It flashes the latest release. On a puck that's never had Pucksley,
+let it erase the board first.
+
+**Or with esptool**: download `pucksley-firmware.zip` from the
+[latest release](https://github.com/tank104/Pucksley/releases/latest), unpack it, and in the
+`pucksley-firmware` folder:
+
+```bash
+pip install esptool
+python -m esptool --chip esp32s3 -p COM5 write_flash @flash_args    # your port: COM5, /dev/ttyACM0…
+```
+
+Flashing an update this way keeps the puck's Wi‑Fi and its pairing with the hub.
+
+**Or build it yourself** (ESP-IDF 5.5):
 
 ```powershell
 cd firmware
 idf.py set-target esp32s3        # once
-idf.py -p COM5 flash             # replace COM5; hold BOOT while plugging in if it won't enter download mode
+idf.py -p COM5 flash
 ```
-
-On Linux the port is `/dev/ttyACM0` (`idf.py -p /dev/ttyACM0 flash`), and your user needs to be in
-the group that owns it (`uucp` on Arch and Omarchy, `dialout` on Debian, Ubuntu and Fedora).
 
 To keep a copy of what's on the board first (all 16 MB):
 `python -m esptool --chip esp32s3 --port COM5 read_flash 0 0x1000000 board-backup.bin`.
